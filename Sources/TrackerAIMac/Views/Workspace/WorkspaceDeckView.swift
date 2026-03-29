@@ -122,6 +122,7 @@ struct WorkspaceDeckView: View {
                         WorkspaceMetricRow(label: "Frame", value: "\(model.currentFrame)")
                         WorkspaceMetricRow(label: "Range", value: "\(model.startFrame) → \(model.endFrame)")
                         WorkspaceMetricRow(label: "Preset", value: model.selectedPreset.title)
+                        WorkspaceMetricRow(label: "Reference", value: model.referenceMarkerStatus)
                         WorkspaceMetricRow(label: "Engine", value: model.engineState.rawValue)
                     }
                 }
@@ -212,7 +213,7 @@ private struct VideoWorkspaceView: View {
                 GeometryReader { proxy in
                     let videoRect = aspectFitRect(content: model.sourceVideoSize, in: proxy.size)
 
-                    VideoPlayer(player: player)
+                    MacVideoPlayerView(player: player)
                         .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
                         .overlay(alignment: .topLeading) {
                             overlayBadges
@@ -252,6 +253,7 @@ private struct VideoWorkspaceView: View {
             StatusPill(text: model.engineState.rawValue, tone: badgeColor)
             if model.isScaleReady { StatusPill(text: "Calibration Ready", tone: TrackerTheme.accent) }
             if model.isTargetReady { StatusPill(text: "Target Ready", tone: TrackerTheme.success) }
+            if model.isReferenceReady { StatusPill(text: "Reference Ready", tone: TrackerTheme.navy) }
             if !model.additionalObjects.isEmpty { StatusPill(text: "\(model.additionalObjects.count) Companion Object(s)", tone: TrackerTheme.navy) }
             if model.annotationMode != .idle {
                 StatusPill(text: "Drawing \(model.annotationMode.rawValue.capitalized)", tone: TrackerTheme.warning)
@@ -277,6 +279,24 @@ private struct VideoWorkspaceView: View {
                     .stroke(TrackerTheme.success, lineWidth: 3)
                     .frame(width: displayRect.width, height: displayRect.height)
                     .position(x: displayRect.midX, y: displayRect.midY)
+            }
+
+            if let rect = model.referenceBox.cgRect {
+                let displayRect = videoRectForDisplay(rect, videoRect: videoRect)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(TrackerTheme.navy, style: StrokeStyle(lineWidth: 3, dash: [8, 5]))
+                    .frame(width: displayRect.width, height: displayRect.height)
+                    .position(x: displayRect.midX, y: displayRect.midY)
+                    .overlay(alignment: .topLeading) {
+                        Text("Reference")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(TrackerTheme.navy)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.white.opacity(0.92))
+                            .clipShape(Capsule())
+                            .padding(8)
+                    }
             }
 
             ForEach(model.additionalObjects) { object in
@@ -320,7 +340,7 @@ private struct VideoWorkspaceView: View {
     private func previewShape(videoRect: CGRect) -> some View {
         if let dragStart, let dragCurrent {
             switch model.annotationMode {
-            case .target, .correction, .companion:
+            case .target, .reference, .correction, .companion:
                 let rect = normalizedRect(from: dragStart, to: dragCurrent)
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .stroke(previewColor, style: StrokeStyle(lineWidth: 3, dash: [10, 6]))
@@ -364,6 +384,9 @@ private struct VideoWorkspaceView: View {
         case .target:
             let videoBounds = videoRectToVideo(displayBounds, videoRect: videoRect)
             model.applyDrawnTargetBox(videoBounds)
+        case .reference:
+            let videoBounds = videoRectToVideo(displayBounds, videoRect: videoRect)
+            model.applyDrawnReferenceBox(videoBounds)
         case .scale:
             let videoStart = videoPoint(fromDisplay: start, videoRect: videoRect)
             let videoEnd = videoPoint(fromDisplay: end, videoRect: videoRect)
@@ -383,6 +406,8 @@ private struct VideoWorkspaceView: View {
         switch model.annotationMode {
         case .target:
             return TrackerTheme.success
+        case .reference:
+            return TrackerTheme.navy
         case .correction:
             return TrackerTheme.warning
         case .companion:
@@ -461,6 +486,25 @@ private struct VideoWorkspaceView: View {
             width: abs(opposite.x - origin.x),
             height: abs(opposite.y - origin.y)
         )
+    }
+}
+
+private struct MacVideoPlayerView: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.controlsStyle = .none
+        view.showsFullScreenToggleButton = false
+        view.videoGravity = .resizeAspect
+        view.player = player
+        return view
+    }
+
+    func updateNSView(_ nsView: AVPlayerView, context: Context) {
+        if nsView.player !== player {
+            nsView.player = player
+        }
     }
 }
 

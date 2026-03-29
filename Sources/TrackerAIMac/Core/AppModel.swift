@@ -18,6 +18,7 @@ final class AppModel {
 
     var workspaceClips: [WorkspaceClip] = []
     var currentVideoURL: URL?
+    var sourceVideoMetadata: NativeVideoMetadata?
     var player: AVPlayer?
     var sourceVideoSize = CGSize(width: 1920, height: 1080)
 
@@ -41,7 +42,23 @@ final class AppModel {
     var includeOverlay = true
     var includePlots = true
     var reportTemplate = "research"
-    var advancedMode = false
+    var advancedMode = false {
+        didSet {
+            guard oldValue != advancedMode else { return }
+            statusMessage = advancedMode
+                ? "Advanced calibration controls enabled."
+                : "Advanced calibration controls hidden. The current scientific setup is still preserved."
+        }
+    }
+    var calibrationMode = "single_line"
+    var calibrationOriginXInput = "0"
+    var calibrationOriginYInput = "0"
+    var calibrationAxisAngleInput = "0"
+    var calibrationInvertX = false
+    var calibrationInvertY = false
+    var calibrationHomographyInput = ""
+    var calibrationPresetName = ""
+    var calibrationPixelDistanceInput = "20"
 
     var targetBox = BoundingBoxDraft()
     var scaleLine = ScaleLineDraft()
@@ -89,10 +106,29 @@ final class AppModel {
     var pairwiseMetrics: [PairwiseMetricSnapshot] = []
     var selectedPairwiseMetricID: String?
 
+    var calibrationValidationMessage: String? {
+        guard CalibrationProfile.normalizedMode(calibrationMode) == "homography" else { return nil }
+        let trimmed = calibrationHomographyInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "Enter 9 numeric homography values separated by spaces or commas." }
+        let components = trimmed
+            .replacingOccurrences(of: ",", with: " ")
+            .split(whereSeparator: \.isWhitespace)
+        guard components.count == 9 else {
+            return "Homography mode requires exactly 9 numeric values."
+        }
+        if components.contains(where: { Double($0) == nil }) {
+            return "Homography values must all be numeric."
+        }
+        return nil
+    }
+
     private let engine = PythonEngineBridge()
     private let nativeExporter = NativeResearchBundleExporter()
     private let nativeScientificProcessor = NativeScientificProcessor()
+    private let nativeTrackingPipeline = NativeTrackingPipeline()
     private let nativeScientificReporter = NativeResearchReporter()
+    private var currentVideoSource: NativeVideoSource?
+    private var pendingVideoLoadID = UUID()
 
     init() {
         bootstrapWorkspace()
@@ -114,12 +150,23 @@ final class AppModel {
             return "Load a clip or session to start the commercialization-ready native workflow."
         }
         let classification = summarySnapshot?.classification?.title ?? "pending"
-        return "Preset: \(selectedPreset.title)\nFrame range: \(startFrame) → \(endFrame)\nActive track: \(activeTrackLabel)\nClassification: \(classification)\nManual events: \(manualEvents.count) | Derived events: \(derivedEvents.count) | Review items: \(reviewQueue.count) | Secondary objects: \(additionalObjects.count)"
+        let referenceState = isReferenceReady ? "enabled" : "optional"
+        return "Preset: \(selectedPreset.title)\nFrame range: \(startFrame) → \(endFrame)\nActive track: \(activeTrackLabel)\nClassification: \(classification)\nReference marker: \(referenceState)\nManual events: \(manualEvents.count) | Derived events: \(derivedEvents.count) | Review items: \(reviewQueue.count) | Secondary objects: \(additionalObjects.count)"
     }
 
     var isTargetReady: Bool { targetBox.isComplete }
     var isScaleReady: Bool { scaleLine.isComplete }
-    var canRunAnalysis: Bool { currentVideoURL != nil && isTargetReady && isScaleReady }
+    var isReferenceReady: Bool { referenceBox.isComplete }
+    var referenceMarkerStatus: String {
+        if isReferenceReady {
+            return "Ready"
+        }
+        if annotationMode == .reference {
+            return "Drawing"
+        }
+        return "Optional"
+    }
+    var canRunAnalysis: Bool { currentVideoURL != nil && isTargetReady && isScaleReady && calibrationValidationMessage == nil }
     var maxFrame: Double { Double(max(endFrame, startFrame + 1)) }
     var allEvents: [EventMarkerRecord] { (derivedEvents + manualEvents).sorted { ($0.frameIndex, $0.name) < ($1.frameIndex, $1.name) } }
     var activeTrackBundle: AnalysisTrackBundle? {
@@ -167,6 +214,10 @@ final class AppModel {
             maxSpeed: rows.map(\.speed).max() ?? 0,
             maxAcceleration: rows.map(\.accelerationMagnitude).max() ?? 0
         )
+    }
+
+    private var currentFrameTimestamp: Double {
+        timestampForFrame(currentFrame)
     }
 
     func bootstrapWorkspace() {
@@ -396,6 +447,13 @@ final class AppModel {
         selectionMessage = "Drag across the reference object in the video to define the calibration line."
     }
 
+    func startReferenceDrawing() {
+        annotationMode = .reference
+        editingCorrectionID = nil
+        editingAdditionalObjectID = nil
+        selectionMessage = "Drag directly on the video to define the reference marker used for motion correction."
+    }
+
     func startCorrectionDrawing(existing: CorrectionRecord? = nil) {
         annotationMode = .correction
         editingCorrectionID = existing?.id
@@ -453,6 +511,15 @@ final class AppModel {
         statusMessage = "Cleared scale line."
     }
 
+    func clearReferenceBox() {
+        referenceBox = BoundingBoxDraft()
+        if annotationMode == .reference {
+            annotationMode = .idle
+        }
+        statusMessage = "Cleared reference marker."
+        selectionMessage = "Reference marker removed. You can redraw it later if the apparatus or camera may drift."
+    }
+
     func removeCorrection(_ correction: CorrectionRecord) {
         corrections.removeAll { $0.id == correction.id }
         if editingCorrectionID == correction.id {
@@ -475,6 +542,13 @@ final class AppModel {
         annotationMode = .idle
         statusMessage = "Updated scale line from native canvas."
         selectionMessage = "Scale line updated. Confirm reference length and unit before analysis."
+    }
+
+    func applyDrawnReferenceBox(_ rect: CGRect) {
+        referenceBox = Self.boundingBoxDraft(from: rect)
+        annotationMode = .idle
+        statusMessage = "Updated reference marker from native canvas."
+        selectionMessage = "Reference marker updated. The analysis can now compensate for apparatus or camera drift when available."
     }
 
     func applyDrawnCorrection(_ rect: CGRect) {
@@ -525,7 +599,7 @@ final class AppModel {
         let event = EventMarkerRecord(
             name: manualEventName.isEmpty ? "manual_event" : manualEventName,
             frameIndex: currentFrame,
-            timeSeconds: Double(currentFrame) / max(playbackFPS, 1),
+            timeSeconds: currentFrameTimestamp,
             value: Double(manualEventValue) ?? 0,
             unitLabel: manualEventUnit,
             note: manualEventNote,
@@ -859,7 +933,7 @@ final class AppModel {
         }
     }
 
-    private func apply(session: SessionSnapshot, sessionURL: URL, loadBundle: Bool) {
+    func apply(session: SessionSnapshot, sessionURL: URL, loadBundle: Bool) {
         experimentLabel = session.metadata?.experimentLabel ?? experimentLabel
         trialID = session.metadata?.trialID ?? trialID
         operatorName = session.metadata?.operatorName ?? operatorName
@@ -870,8 +944,18 @@ final class AppModel {
         if let end = session.selectedEndFrame { endFrame = end }
         currentFrame = session.reviewState?.lastFrameIndex ?? startFrame
 
+        advancedMode = session.advancedMode ?? advancedMode
         referenceLength = String(session.calibration.referenceLength)
         unitLabel = session.calibration.unitLabel
+        calibrationMode = CalibrationProfile.normalizedMode(session.calibration.mode ?? "single_line")
+        calibrationOriginXInput = formattedCalibrationInput(session.calibration.originXPx ?? 0)
+        calibrationOriginYInput = formattedCalibrationInput(session.calibration.originYPx ?? 0)
+        calibrationAxisAngleInput = formattedCalibrationInput(session.calibration.axisAngleDeg ?? 0)
+        calibrationInvertX = session.calibration.invertX ?? false
+        calibrationInvertY = session.calibration.invertY ?? false
+        calibrationHomographyInput = formattedHomographyInput(session.calibration.homography)
+        calibrationPresetName = session.calibration.presetName ?? ""
+        calibrationPixelDistanceInput = formattedCalibrationInput(session.calibration.pixelDistance)
         smoothingWindow = String(session.analysisConfig.smoothingWindow)
         polyorder = String(session.analysisConfig.smoothingPolyorder)
         trackingProfile = session.trackingConfig?.profile ?? trackingProfile
@@ -894,6 +978,8 @@ final class AppModel {
                 x2: String(points[2]),
                 y2: String(points[3])
             )
+        } else {
+            scaleLine = inferredScaleLine(from: session.calibration)
         }
 
         if let reference = session.referenceBbox {
@@ -903,6 +989,8 @@ final class AppModel {
                 width: String(reference.width),
                 height: String(reference.height)
             )
+        } else {
+            referenceBox = BoundingBoxDraft()
         }
 
         manualEvents = (session.eventMarkers ?? []).filter { ($0.origin ?? "derived") == "manual" }.map {
@@ -992,7 +1080,7 @@ final class AppModel {
             ]
         }
         if FileManager.default.fileExists(atPath: session.videoPath) {
-            loadVideo(URL(fileURLWithPath: session.videoPath))
+            loadVideo(URL(fileURLWithPath: session.videoPath), resetSelection: false)
         }
         let overlayFlag = includeOverlay ? "" : " --skip-overlay"
         let plotFlag = includePlots ? "" : " --skip-plots"
@@ -1252,39 +1340,73 @@ final class AppModel {
 
     private func seekPlayer() {
         guard let player else { return }
-        let time = CMTime(seconds: Double(currentFrame) / max(playbackFPS, 1), preferredTimescale: 600)
-        player.seek(to: time)
+        let time = (try? currentVideoSource?.presentationTime(forFrameIndex: currentFrame)) ?? CMTime(
+            seconds: currentFrameTimestamp,
+            preferredTimescale: 600
+        )
+        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
     }
 
-    private func loadVideo(_ url: URL) {
+    private func loadVideo(_ url: URL, resetSelection: Bool = true) {
         currentVideoURL = url
+        currentVideoSource = nil
+        sourceVideoMetadata = nil
         player = AVPlayer(url: url)
+        let loadID = UUID()
+        pendingVideoLoadID = loadID
         Task {
-            await loadVideoMetadata(for: url)
+            await loadVideoSource(for: url, resetSelection: resetSelection, loadID: loadID)
         }
     }
 
-    private func loadVideoMetadata(for url: URL) async {
-        let asset = AVURLAsset(url: url)
+    private func loadVideoSource(for url: URL, resetSelection: Bool, loadID: UUID) async {
         do {
-            let tracks = try await asset.loadTracks(withMediaType: .video)
-            if let track = tracks.first {
-                let naturalSize = try await track.load(.naturalSize)
-                let preferredTransform = try await track.load(.preferredTransform)
-                let transformed = naturalSize.applying(preferredTransform)
-                let width = abs(transformed.width)
-                let height = abs(transformed.height)
-                if width > 0, height > 0 {
-                    sourceVideoSize = CGSize(width: width, height: height)
-                }
-                let nominalFrameRate = try await track.load(.nominalFrameRate)
-                if nominalFrameRate > 0 {
-                    playbackFPS = Double(nominalFrameRate)
-                }
+            let videoSource = try await NativeVideoSource.open(url: url)
+            guard pendingVideoLoadID == loadID, currentVideoURL == url else { return }
+            currentVideoSource = videoSource
+            sourceVideoMetadata = videoSource.metadata
+            if videoSource.metadata.width > 0, videoSource.metadata.height > 0 {
+                sourceVideoSize = videoSource.metadata.presentationSize
             }
+            playbackFPS = videoSource.metadata.fps
+            applyVideoFrameBounds(frameCount: videoSource.metadata.frameCount, resetSelection: resetSelection)
         } catch {
-            statusMessage = "Loaded video, but metadata parsing was limited: \(error.localizedDescription)"
+            guard pendingVideoLoadID == loadID, currentVideoURL == url else { return }
+            statusMessage = "Loaded video, but native metadata parsing was limited: \(error.localizedDescription)"
         }
+    }
+
+    private func applyVideoFrameBounds(frameCount: Int, resetSelection: Bool) {
+        let lastFrameIndex = max(frameCount - 1, 0)
+        if resetSelection {
+            startFrame = 0
+            endFrame = lastFrameIndex
+            currentFrame = 0
+            selectedWindowStart = startFrame
+            selectedWindowEnd = endFrame
+        } else {
+            startFrame = min(max(startFrame, 0), lastFrameIndex)
+            endFrame = min(max(endFrame, startFrame), lastFrameIndex)
+            currentFrame = min(max(currentFrame, startFrame), endFrame)
+            if let selectedWindowStart {
+                self.selectedWindowStart = min(max(selectedWindowStart, startFrame), endFrame)
+            } else {
+                self.selectedWindowStart = startFrame
+            }
+            if let selectedWindowEnd {
+                self.selectedWindowEnd = min(max(selectedWindowEnd, startFrame), endFrame)
+            } else {
+                self.selectedWindowEnd = endFrame
+            }
+        }
+        seekPlayer()
+    }
+
+    private func timestampForFrame(_ frameIndex: Int) -> Double {
+        if let currentVideoSource, let timestamp = try? currentVideoSource.frameTimestamp(forFrameIndex: frameIndex) {
+            return timestamp
+        }
+        return Double(frameIndex) / max(playbackFPS, 1)
     }
 
     private static func boundingBoxDraft(from rect: CGRect) -> BoundingBoxDraft {
@@ -1359,23 +1481,23 @@ final class AppModel {
         }
     }
 
-    private func buildSessionSnapshot(videoURL: URL) throws -> SessionSnapshot {
+    func buildSessionSnapshot(videoURL: URL) throws -> SessionSnapshot {
+        try baseSessionSnapshot(
+            videoURL: videoURL,
+            trackQuality: resolvedTrackQualitySnapshot(rows: analysisRows, trackID: activeTrackID)
+        )
+    }
+
+    private func baseSessionSnapshot(videoURL: URL, trackQuality: TrackQualitySnapshot?) throws -> SessionSnapshot {
         let initialBox = try bboxSnapshot(from: targetBox, label: "target box")
         let reference = referenceBox.isComplete ? try bboxSnapshot(from: referenceBox, label: "reference box") : nil
         let scalePoints = try scalePointValues()
+        let calibration = CalibrationSnapshot(profile: try buildCalibrationProfile(scalePoints: scalePoints))
 
         return SessionSnapshot(
             videoPath: videoURL.path,
             initialBbox: initialBox,
-            calibration: CalibrationSnapshot(
-                referenceLength: Double(referenceLength) ?? 1.0,
-                unitLabel: unitLabel.isEmpty ? "m" : unitLabel,
-                pixelDistance: pixelDistance(from: scaleLine),
-                mode: "line",
-                originXPx: nil,
-                originYPx: nil,
-                axisAngleDeg: nil
-            ),
+            calibration: calibration,
             analysisConfig: AnalysisConfigSnapshot(
                 smoothingWindow: Int(smoothingWindow) ?? 7,
                 smoothingPolyorder: Int(polyorder) ?? 2
@@ -1393,6 +1515,7 @@ final class AppModel {
                 notes: notes,
                 tags: tags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
             ),
+            advancedMode: advancedMode,
             selectedStartFrame: startFrame,
             selectedEndFrame: endFrame,
             scalePoints: scalePoints,
@@ -1440,7 +1563,7 @@ final class AppModel {
                     )
                 )
             },
-            trackQuality: resolvedTrackQualitySnapshot(rows: analysisRows, trackID: activeTrackID),
+            trackQuality: trackQuality,
             exportPreferences: ExportPreferencesSnapshot(
                 includeOverlay: includeOverlay,
                 includeDebugTracking: debugTracking,
@@ -1488,12 +1611,12 @@ final class AppModel {
 
     private func currentScientificSessionSnapshot(for bundle: AnalysisTrackBundle) -> SessionSnapshot? {
         guard let videoURL = currentVideoURL else { return nil }
-        guard let session = try? buildSessionSnapshot(videoURL: videoURL) else { return nil }
+        guard let session = try? baseSessionSnapshot(videoURL: videoURL, trackQuality: nil) else { return nil }
         return session
     }
 
     private func resolvedTrackQualitySnapshot(rows: [AnalysisRow], trackID: String) -> TrackQualitySnapshot? {
-        let derivedQuality = rows.isEmpty ? nil : nativeScientificReporter.deriveTrackQuality(rows: rows)
+        let derivedQuality = nativeTrackQualitySnapshot(rows: rows, trackID: trackID)
         guard trackID == "primary" else {
             return derivedQuality ?? sessionTrackQuality
         }
@@ -1522,37 +1645,61 @@ final class AppModel {
         var normalized = loadResult
         let reproduce = nativeReproduceCommand(for: session, outputDirectory: normalized.exportDirectory)
         let manualEventCount = (session.eventMarkers ?? []).filter { ($0.origin ?? "manual") == "manual" }.count
-
-        if normalized.trackBundles.isEmpty {
-            let primaryBundle = rebuiltTrackBundle(
-                trackID: "primary",
-                trackName: "Primary Object",
-                trackKind: "primary",
-                rows: normalized.analysisRows,
-                reportMarkdown: normalized.reportMarkdown,
-                exportDirectory: normalized.exportDirectory,
-                session: session,
-                pairwiseMetrics: normalized.pairwiseMetrics,
-                reproduceCommand: reproduce,
-                manualEventCount: manualEventCount
-            )
-            normalized.trackBundles = [primaryBundle]
-        } else {
-            normalized.trackBundles = normalized.trackBundles.map { bundle in
-                rebuiltTrackBundle(
-                    trackID: bundle.trackID,
-                    trackName: bundle.trackName,
-                    trackKind: bundle.trackKind,
-                    rows: bundle.analysisRows,
-                    reportMarkdown: bundle.reportMarkdown,
-                    exportDirectory: bundle.exportDirectory,
-                    session: session,
-                    pairwiseMetrics: normalized.pairwiseMetrics,
-                    reproduceCommand: reproduce,
-                    manualEventCount: bundle.trackID == "primary" ? manualEventCount : 0
-                )
+        let sourceBundles: [AnalysisTrackBundle] = {
+            if normalized.trackBundles.isEmpty {
+                return [
+                    AnalysisTrackBundle(
+                        trackID: "primary",
+                        trackName: "Primary Object",
+                        trackKind: "primary",
+                        summary: normalized.summary,
+                        quality: normalized.quality,
+                        modules: normalized.modules,
+                        analysisRows: normalized.analysisRows,
+                        reportMarkdown: normalized.reportMarkdown,
+                        exportDirectory: normalized.exportDirectory
+                    )
+                ]
             }
+            return normalized.trackBundles
+        }()
+
+        let processedBundles = sourceBundles.map { bundle in
+            AnalysisTrackBundle(
+                trackID: bundle.trackID,
+                trackName: bundle.trackName,
+                trackKind: bundle.trackKind,
+                summary: bundle.summary,
+                quality: bundle.quality,
+                modules: bundle.modules,
+                analysisRows: nativeScientificProcessor.process(rows: bundle.analysisRows, session: session),
+                reportMarkdown: bundle.reportMarkdown,
+                exportDirectory: bundle.exportDirectory
+            )
         }
+        let nativeTracks = processedBundles.compactMap { nativeTrackingPipeline.reconstructTrack(bundle: $0, session: session) }
+        let analysesByTrackID = Dictionary(uniqueKeysWithValues: processedBundles.map { ($0.trackID, $0.analysisRows) })
+        let nativePairwiseMetrics = nativeTrackingPipeline.rebuildPairwiseMetrics(
+            tracks: nativeTracks,
+            analysesByTrackID: analysesByTrackID
+        )
+        let resolvedPairwiseMetrics = nativePairwiseMetrics.isEmpty ? normalized.pairwiseMetrics : nativePairwiseMetrics
+
+        normalized.trackBundles = processedBundles.map { bundle in
+            rebuiltTrackBundle(
+                trackID: bundle.trackID,
+                trackName: bundle.trackName,
+                trackKind: bundle.trackKind,
+                processedRows: bundle.analysisRows,
+                reportMarkdown: bundle.reportMarkdown,
+                exportDirectory: bundle.exportDirectory,
+                session: session,
+                pairwiseMetrics: resolvedPairwiseMetrics,
+                reproduceCommand: reproduce,
+                manualEventCount: bundle.trackID == "primary" ? manualEventCount : 0
+            )
+        }
+        normalized.pairwiseMetrics = resolvedPairwiseMetrics
 
         let primaryBundle = normalized.trackBundles.first(where: { $0.trackID == "primary" }) ?? normalized.trackBundles.first
         normalized.analysisRows = primaryBundle?.analysisRows ?? nativeScientificProcessor.process(rows: normalized.analysisRows, session: session)
@@ -1560,9 +1707,9 @@ final class AppModel {
         normalized.quality = primaryBundle?.quality ?? normalized.quality
         normalized.modules = primaryBundle?.modules ?? normalized.modules
         normalized.reportMarkdown = primaryBundle?.reportMarkdown ?? normalized.reportMarkdown
-        let reconstructedTrackQuality = reconstructedPrimaryTrackQuality(
-            session: session,
-            rows: normalized.analysisRows
+        let reconstructedTrackQuality = mergedPrimaryTrackQuality(
+            existing: session.trackQuality,
+            nativeTracks: nativeTracks
         )
         normalized.session = sessionByUpdatingTrackQuality(
             session,
@@ -1575,7 +1722,7 @@ final class AppModel {
         trackID: String,
         trackName: String,
         trackKind: String,
-        rows: [AnalysisRow],
+        processedRows: [AnalysisRow],
         reportMarkdown: String,
         exportDirectory: URL,
         session: SessionSnapshot,
@@ -1583,7 +1730,6 @@ final class AppModel {
         reproduceCommand: String,
         manualEventCount: Int
     ) -> AnalysisTrackBundle {
-        let processedRows = nativeScientificProcessor.process(rows: rows, session: session)
         let quality = nativeScientificReporter.buildQuality(
             session: session,
             rows: processedRows,
@@ -1627,6 +1773,7 @@ final class AppModel {
             quality: quality,
             classification: classification,
             modules: modules,
+            pairwiseMetrics: pairwiseMetrics,
             eventMarkers: mergedEvents,
             reproduceCommand: reproduceCommand
         )
@@ -1721,9 +1868,40 @@ final class AppModel {
             }
     }
 
-    private func reconstructedPrimaryTrackQuality(session: SessionSnapshot, rows: [AnalysisRow]) -> TrackQualitySnapshot? {
-        let derivedQuality = rows.isEmpty ? nil : nativeScientificReporter.deriveTrackQuality(rows: rows)
-        guard let existing = session.trackQuality else { return derivedQuality }
+    private func nativeTrackQualitySnapshot(rows: [AnalysisRow], trackID: String) -> TrackQualitySnapshot? {
+        guard let session = currentSessionSnapshotForTrackQuality(trackID: trackID) else {
+            return rows.isEmpty ? nil : nativeScientificReporter.deriveTrackQuality(rows: rows)
+        }
+        let bundle = AnalysisTrackBundle(
+            trackID: trackID,
+            trackName: trackDisplayName(for: trackID),
+            trackKind: trackBundles.first(where: { $0.trackID == trackID })?.trackKind ?? (trackID == "primary" ? "primary" : "secondary"),
+            summary: nil,
+            quality: nil,
+            modules: [],
+            analysisRows: rows,
+            reportMarkdown: "",
+            exportDirectory: exportDirectory ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        )
+        return nativeTrackingPipeline.deriveTrackQuality(for: bundle, session: session)
+    }
+
+    private func currentSessionSnapshotForTrackQuality(trackID: String) -> SessionSnapshot? {
+        if trackBundles.contains(where: { $0.trackID == trackID }), let currentVideoURL {
+            return try? baseSessionSnapshot(videoURL: currentVideoURL, trackQuality: nil)
+        }
+        if trackID == "primary", let currentVideoURL {
+            return try? baseSessionSnapshot(videoURL: currentVideoURL, trackQuality: nil)
+        }
+        return nil
+    }
+
+    private func mergedPrimaryTrackQuality(
+        existing: TrackQualitySnapshot?,
+        nativeTracks: [NativeTrackReconstruction]
+    ) -> TrackQualitySnapshot? {
+        let derivedQuality = nativeTracks.first(where: { $0.trackID == "primary" })?.quality
+        guard let existing else { return derivedQuality }
         guard let derivedQuality else { return existing }
         return mergeTrackQuality(existing: existing, derived: derivedQuality)
     }
@@ -1750,6 +1928,156 @@ final class AppModel {
             throw NSError(domain: "TrackerAIMac", code: 2, userInfo: [NSLocalizedDescriptionKey: "The scale line contains invalid numeric values."])
         }
         return [x1, y1, x2, y2]
+    }
+
+    func calibrationProfileForCurrentSetup() throws -> CalibrationProfile {
+        try buildCalibrationProfile(scalePoints: scalePointValues())
+    }
+
+    private func buildCalibrationProfile(scalePoints: [Double]) throws -> CalibrationProfile {
+        let referenceLengthValue = Double(referenceLength) ?? 1.0
+        let resolvedUnitLabel = unitLabel.isEmpty ? "m" : unitLabel
+        let mode = CalibrationProfile.normalizedMode(calibrationMode)
+        let x1 = scalePoints[0]
+        let y1 = scalePoints[1]
+        let x2 = scalePoints[2]
+        let y2 = scalePoints[3]
+        let originX = try calibrationNumber(from: calibrationOriginXInput, fieldName: "origin X", defaultValue: 0)
+        let originY = try calibrationNumber(from: calibrationOriginYInput, fieldName: "origin Y", defaultValue: 0)
+        let axisAngle = try calibrationNumber(from: calibrationAxisAngleInput, fieldName: "axis angle", defaultValue: 0)
+
+        switch mode {
+        case "two_axis":
+            let derived = try CalibrationProfile.fromAxisPoints(
+                originX: x1,
+                originY: y1,
+                axisX: x2,
+                axisY: y2,
+                referenceLength: referenceLengthValue,
+                unitLabel: resolvedUnitLabel,
+                invertX: calibrationInvertX,
+                invertY: calibrationInvertY
+            )
+            return try CalibrationProfile(
+                referenceLength: referenceLengthValue,
+                unitLabel: resolvedUnitLabel,
+                pixelDistance: derived.pixelDistance,
+                mode: mode,
+                originXPx: originX == 0 && originY == 0 ? derived.originXPx : originX,
+                originYPx: originX == 0 && originY == 0 ? derived.originYPx : originY,
+                axisAngleDeg: calibrationAxisAngleInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? derived.axisAngleDeg : axisAngle,
+                invertX: calibrationInvertX,
+                invertY: calibrationInvertY,
+                presetName: calibrationPresetName
+            )
+        case "marker_size":
+            return try CalibrationProfile.fromMarkerSize(
+                markerBBoxWidthPx: try resolvedCalibrationPixelDistance(),
+                referenceLength: referenceLengthValue,
+                unitLabel: resolvedUnitLabel,
+                presetName: calibrationPresetName
+            )
+        case "homography":
+            return try CalibrationProfile.fromHomography(
+                homography: try parsedCalibrationHomography(),
+                referenceLength: referenceLengthValue,
+                unitLabel: resolvedUnitLabel,
+                pixelDistance: resolvedCalibrationPixelDistance(),
+                originXPx: originX,
+                originYPx: originY,
+                presetName: calibrationPresetName
+            )
+        default:
+            let derived = try CalibrationProfile.fromPoints(
+                x1: x1,
+                y1: y1,
+                x2: x2,
+                y2: y2,
+                referenceLength: referenceLengthValue,
+                unitLabel: resolvedUnitLabel
+            )
+            return try CalibrationProfile(
+                referenceLength: referenceLengthValue,
+                unitLabel: resolvedUnitLabel,
+                pixelDistance: derived.pixelDistance,
+                mode: "single_line",
+                originXPx: originX,
+                originYPx: originY,
+                axisAngleDeg: axisAngle,
+                invertX: calibrationInvertX,
+                invertY: calibrationInvertY,
+                presetName: calibrationPresetName
+            )
+        }
+    }
+
+    private func resolvedCalibrationPixelDistance() throws -> Double {
+        let trimmed = calibrationPixelDistanceInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return 20
+        }
+        guard let value = Double(trimmed), value > 0 else {
+            throw NSError(
+                domain: "TrackerAIMac",
+                code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "Marker size / pixel distance must be a positive number."]
+            )
+        }
+        return value
+    }
+
+    private func calibrationNumber(from rawValue: String, fieldName: String, defaultValue: Double) throws -> Double {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return defaultValue }
+        guard let value = Double(trimmed) else {
+            throw NSError(
+                domain: "TrackerAIMac",
+                code: 5,
+                userInfo: [NSLocalizedDescriptionKey: "Calibration \(fieldName) must be numeric."]
+            )
+        }
+        return value
+    }
+
+    private func parsedCalibrationHomography() throws -> [Double] {
+        if let calibrationValidationMessage {
+            throw NSError(
+                domain: "TrackerAIMac",
+                code: 6,
+                userInfo: [NSLocalizedDescriptionKey: calibrationValidationMessage]
+            )
+        }
+        return calibrationHomographyInput
+            .replacingOccurrences(of: ",", with: " ")
+            .split(whereSeparator: \.isWhitespace)
+            .compactMap { Double($0) }
+    }
+
+    private func inferredScaleLine(from calibration: CalibrationSnapshot) -> ScaleLineDraft {
+        let originX = calibration.originXPx ?? 0
+        let originY = calibration.originYPx ?? 0
+        let angle = (calibration.axisAngleDeg ?? 0) * .pi / 180
+        let distance = calibration.pixelDistance
+        let endX = originX + (cos(angle) * distance)
+        let endY = originY + (sin(angle) * distance)
+        return ScaleLineDraft(
+            x1: String(originX),
+            y1: String(originY),
+            x2: String(endX),
+            y2: String(endY)
+        )
+    }
+
+    private func formattedCalibrationInput(_ value: Double) -> String {
+        if value.rounded() == value {
+            return String(Int(value))
+        }
+        return String(value)
+    }
+
+    private func formattedHomographyInput(_ values: [Double]?) -> String {
+        guard let values, !values.isEmpty else { return "" }
+        return values.map(formattedCalibrationInput).joined(separator: " ")
     }
 
     private func pixelDistance(from line: ScaleLineDraft) -> Double {
@@ -1790,7 +2118,7 @@ final class AppModel {
         return entries
     }
 
-    private func runConfiguration(from session: SessionSnapshot, outputDirectory: URL) throws -> NativeRunConfiguration {
+    func runConfiguration(from session: SessionSnapshot, outputDirectory: URL) throws -> NativeRunConfiguration {
         let metadata = session.metadata
         let scale = session.scalePoints ?? []
         guard scale.count == 4 else {
@@ -1880,6 +2208,7 @@ final class AppModel {
             analysisConfig: preserved.analysisConfig,
             trackingConfig: preserved.trackingConfig ?? generated.trackingConfig,
             metadata: preserved.metadata ?? generated.metadata,
+            advancedMode: preserved.advancedMode ?? generated.advancedMode,
             selectedStartFrame: preserved.selectedStartFrame ?? generated.selectedStartFrame,
             selectedEndFrame: preserved.selectedEndFrame ?? generated.selectedEndFrame,
             scalePoints: preserved.scalePoints ?? generated.scalePoints,

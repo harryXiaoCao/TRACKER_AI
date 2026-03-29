@@ -35,6 +35,42 @@ struct SetupWorkspaceView: View {
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(TrackerTheme.ink)
                         NumericGrid(scale: $model.scaleLine)
+
+                        Divider()
+
+                        Text("Reference marker")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(TrackerTheme.ink)
+                        HStack(spacing: 10) {
+                            Button("Draw Reference Marker", action: startReferenceDrawing)
+                                .buttonStyle(PrimaryActionButtonStyle())
+                            Button("Clear", action: clearReferenceBox)
+                                .buttonStyle(GhostActionButtonStyle())
+                        }
+                        Text("Optional but first-class: draw a stable apparatus marker when camera or rig motion could bias the tracked object. The same box is persisted in the session and threaded into analysis/export.")
+                            .font(.system(size: 13))
+                            .foregroundStyle(TrackerTheme.muted)
+                        MacFormRow(label: "Status") {
+                            Text(model.referenceMarkerStatus)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(model.isReferenceReady ? TrackerTheme.success : TrackerTheme.muted)
+                        }
+                        NumericGrid(box: $model.referenceBox)
+
+                        Divider()
+
+                        if model.advancedMode {
+                            AdvancedCalibrationEditor(model: model)
+                        } else {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Advanced calibration is hidden until you turn on `Advanced Mode` in the workspace header.")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(TrackerTheme.muted)
+                                Text("When enabled, Swift exposes the same scientific setup controls as the Python app: calibration mode, origin offsets, axis angle, marker-size calibration, homography, and axis inversion.")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(TrackerTheme.muted)
+                            }
+                        }
                     }
                 }
 
@@ -176,11 +212,112 @@ struct SetupWorkspaceView: View {
         model.startTargetDrawing()
     }
 
+    private func startReferenceDrawing() {
+        model.startReferenceDrawing()
+    }
+
     private func clearTargetBox() {
         model.clearTargetBox()
     }
 
+    private func clearReferenceBox() {
+        model.clearReferenceBox()
+    }
+
     private func runAnalysis() {
         Task { await model.runAnalysis() }
+    }
+}
+
+private struct AdvancedCalibrationEditor: View {
+    @Bindable var model: AppModel
+
+    private let calibrationModes = [
+        ("Single line", "single_line"),
+        ("Axis aligned", "two_axis"),
+        ("Marker size", "marker_size"),
+        ("Homography preset", "homography"),
+    ]
+
+    private var mode: String {
+        CalibrationProfile.normalizedMode(model.calibrationMode)
+    }
+
+    private var pixelDistanceLabel: String {
+        mode == "marker_size" ? "Marker Size px" : "Pixel Distance px"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionEyebrow(text: "Advanced Calibration")
+            Text("These controls now map into the saved session and the native calibration transform path, so the Swift setup panel can describe the same scientific frame choices as the Python calibration editor.")
+                .font(.system(size: 13))
+                .foregroundStyle(TrackerTheme.muted)
+
+            MacFormRow(label: "Mode") {
+                Picker("Calibration Mode", selection: $model.calibrationMode) {
+                    ForEach(calibrationModes, id: \.1) { option in
+                        Text(option.0).tag(option.1)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
+
+            if mode == "single_line" || mode == "two_axis" || mode == "homography" {
+                MacFormRow(label: "Origin X") {
+                    TextField("0", text: $model.calibrationOriginXInput)
+                        .textFieldStyle(.roundedBorder)
+                }
+                MacFormRow(label: "Origin Y") {
+                    TextField("0", text: $model.calibrationOriginYInput)
+                        .textFieldStyle(.roundedBorder)
+                }
+            }
+
+            if mode == "single_line" || mode == "two_axis" {
+                MacFormRow(label: "Axis Angle") {
+                    TextField("0", text: $model.calibrationAxisAngleInput)
+                        .textFieldStyle(.roundedBorder)
+                }
+                MacFormRow(label: "Invert Axes") {
+                    HStack(spacing: 12) {
+                        Toggle("Invert X", isOn: $model.calibrationInvertX)
+                            .toggleStyle(.switch)
+                        Toggle("Invert Y", isOn: $model.calibrationInvertY)
+                            .toggleStyle(.switch)
+                    }
+                }
+            }
+
+            if mode == "marker_size" || mode == "homography" {
+                MacFormRow(label: pixelDistanceLabel) {
+                    TextField("20", text: $model.calibrationPixelDistanceInput)
+                        .textFieldStyle(.roundedBorder)
+                }
+            }
+
+            MacFormRow(label: "Preset Name") {
+                TextField("checkerboard", text: $model.calibrationPresetName)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            if mode == "homography" {
+                MacFormRow(label: "Homography") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        TextField("1 0 0 0 1 0 0 0 1", text: $model.calibrationHomographyInput, axis: .vertical)
+                            .textFieldStyle(.roundedBorder)
+                            .lineLimit(3, reservesSpace: true)
+                        Text("Enter 9 numbers in row-major order. Spaces or commas are both accepted.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(TrackerTheme.muted)
+                        if let message = model.calibrationValidationMessage {
+                            Text(message)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.red)
+                        }
+                    }
+                }
+            }
+        }
     }
 }

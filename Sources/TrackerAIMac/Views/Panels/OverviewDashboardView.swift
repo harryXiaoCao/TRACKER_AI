@@ -44,6 +44,7 @@ struct OverviewDashboardView: View {
                         ReadinessRow(title: "Frame Range", complete: model.endFrame >= model.startFrame)
                         ReadinessRow(title: "Calibration", complete: model.isScaleReady)
                         ReadinessRow(title: "Target Box", complete: model.isTargetReady)
+                        ReadinessRow(title: "Reference Marker (Optional)", complete: model.isReferenceReady)
                         ReadinessRow(title: "Analysis", complete: !model.analysisRows.isEmpty)
                         ReadinessRow(title: "Event Journal", complete: !model.manualEvents.isEmpty)
                         ReadinessRow(title: "Derived Events", complete: !model.derivedEvents.isEmpty)

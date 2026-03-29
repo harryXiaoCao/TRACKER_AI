@@ -80,6 +80,7 @@ enum TrackingProfileOption: String, CaseIterable, Identifiable, Codable {
 enum AnnotationMode: String, Equatable {
     case idle
     case target
+    case reference
     case scale
     case correction
     case companion
@@ -449,6 +450,7 @@ struct SessionSnapshot: Codable {
     var analysisConfig: AnalysisConfigSnapshot
     var trackingConfig: TrackingConfigSnapshot?
     var metadata: ExperimentMetadataSnapshot?
+    var advancedMode: Bool?
     var selectedStartFrame: Int?
     var selectedEndFrame: Int?
     var scalePoints: [Double]?
@@ -476,6 +478,10 @@ struct CalibrationSnapshot: Codable {
     var originXPx: Double?
     var originYPx: Double?
     var axisAngleDeg: Double?
+    var invertX: Bool?
+    var invertY: Bool?
+    var homography: [Double]?
+    var presetName: String?
 }
 
 struct AnalysisConfigSnapshot: Codable {
