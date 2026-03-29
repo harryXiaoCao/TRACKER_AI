@@ -1,0 +1,7 @@
+#include "Base.xcconfig"
+
+PRODUCT_NAME = TrackerAI
+SWIFT_COMPILATION_MODE = wholemodule
+DEBUG_INFORMATION_FORMAT = dwarf-with-dsym
+COPY_PHASE_STRIP = YES
+VALIDATE_PRODUCT = YES

@@ -1,0 +1,3 @@
+[console_scripts]
+tracker-ai = tracker_ai.cli:main
+tracker-ai-ui = tracker_ai.main:main

@@ -1,0 +1,15 @@
+name: tracker-ai
+channels:
+  - defaults
+dependencies:
+  - python=3.11
+  - numpy
+  - scipy
+  - pytest
+  - pip
+  - pip:
+      - PySide6
+      - pyqtgraph
+      - matplotlib
+      - opencv-python
+      - -e .

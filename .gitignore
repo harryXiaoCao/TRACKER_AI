@@ -1,0 +1,17 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.build/
+.swiftpm/
+.swiftpm-cache/
+.swift-module-cache/
+.venv/
+venv/
+.env
+dist/
+build/
+DerivedData/
+outputs/
+*.xcuserstate
+*.xcuserdata/

@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tracker-ai"
+version = "0.1.0"
+description = "Desktop-first physics video tracking and kinematics analysis tool."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Codex" }]
+dependencies = [
+  "numpy>=1.26,<3",
+  "opencv-python>=4.9",
+  "scipy>=1.12",
+  "PySide6>=6.7",
+  "pyqtgraph>=0.13",
+  "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+release = [
+  "pyinstaller>=6.0",
+]
+
+[project.scripts]
+tracker-ai = "tracker_ai.cli:main"
+tracker-ai-ui = "tracker_ai.main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
