@@ -24,6 +24,8 @@
 		A1000000000000000000000F /* HelpCenterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000F /* HelpCenterView.swift */; };
 		A10000000000000000000010 /* FormComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000010 /* FormComponents.swift */; };
 		A10000000000000000000011 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000014 /* Assets.xcassets */; };
+		A10000000000000000000012 /* CalibrationProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000018 /* CalibrationProfile.swift */; };
+		A10000000000000000000013 /* NativeVideoSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000019 /* NativeVideoSource.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -50,6 +52,8 @@
 		B10000000000000000000015 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Resources/Info.plist; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000016 /* TrackerAI.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Resources/TrackerAI.entitlements; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000017 /* TrackerAI.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TrackerAI.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B10000000000000000000018 /* CalibrationProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/TrackerAIMac/Core/CalibrationProfile.swift; sourceTree = SOURCE_ROOT; };
+		B10000000000000000000019 /* NativeVideoSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/TrackerAIMac/Core/NativeVideoSource.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -92,6 +96,8 @@
 					B10000000000000000000004 /* AppModel.swift */,
 					B10000000000000000000005 /* PythonEngineBridge.swift */,
 					B10000000000000000000006 /* NativeResearchExports.swift */,
+					B10000000000000000000018 /* CalibrationProfile.swift */,
+					B10000000000000000000019 /* NativeVideoSource.swift */,
 				);
 				path = Core;
 			sourceTree = "<group>";
@@ -254,9 +260,11 @@
 					A1000000000000000000000B /* OverviewDashboardView.swift in Sources */,
 					A1000000000000000000000C /* SetupWorkspaceView.swift in Sources */,
 					A1000000000000000000000D /* ReviewJournalView.swift in Sources */,
-					A1000000000000000000000E /* ResultsLabView.swift in Sources */,
-					A1000000000000000000000F /* HelpCenterView.swift in Sources */,
-					A10000000000000000000010 /* FormComponents.swift in Sources */,
+				A1000000000000000000000E /* ResultsLabView.swift in Sources */,
+				A1000000000000000000000F /* HelpCenterView.swift in Sources */,
+				A10000000000000000000010 /* FormComponents.swift in Sources */,
+				A10000000000000000000012 /* CalibrationProfile.swift in Sources */,
+				A10000000000000000000013 /* NativeVideoSource.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

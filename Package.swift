@@ -17,5 +17,13 @@ let package = Package(
             name: "TrackerAIMac",
             path: "Sources/TrackerAIMac"
         ),
+        .testTarget(
+            name: "TrackerAIMacTests",
+            dependencies: ["TrackerAIMac"],
+            path: "tests/TrackerAIMacTests",
+            resources: [
+                .process("Fixtures"),
+            ]
+        ),
     ]
 )

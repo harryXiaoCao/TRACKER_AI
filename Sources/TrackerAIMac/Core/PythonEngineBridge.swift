@@ -51,6 +51,7 @@ struct PythonEngineBridge {
     func saveWorkspace(_ snapshot: WorkspaceSnapshot, to url: URL) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.keyEncodingStrategy = .convertToSnakeCase
         let data = try encoder.encode(snapshot)
         try data.write(to: url)
     }
@@ -58,6 +59,7 @@ struct PythonEngineBridge {
     func saveSession(_ snapshot: SessionSnapshot, to url: URL) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.keyEncodingStrategy = .convertToSnakeCase
         let data = try encoder.encode(snapshot)
         try data.write(to: url)
     }
@@ -84,7 +86,7 @@ struct PythonEngineBridge {
                 reportMarkdown: primaryBundle.reportMarkdown,
                 exportDirectory: directory,
                 trackBundles: trackBundles,
-                pairwiseMetrics: try parsePairwiseMetricsCSV(at: directory.appendingPathComponent("pairwise_metrics.csv"))
+                pairwiseMetrics: []
             )
         }
 
@@ -98,7 +100,7 @@ struct PythonEngineBridge {
             reportMarkdown: loaded.bundle.reportMarkdown,
             exportDirectory: directory,
             trackBundles: [loaded.bundle],
-            pairwiseMetrics: try parsePairwiseMetricsCSV(at: directory.appendingPathComponent("pairwise_metrics.csv"))
+            pairwiseMetrics: []
         )
     }
 
@@ -227,12 +229,8 @@ struct PythonEngineBridge {
     }
 
     private func loadTrackBundle(from directory: URL, fallbackTrackID: String) throws -> (bundle: AnalysisTrackBundle, session: SessionSnapshot?) {
-        let summary = try decodeIfPresent(SummarySnapshot.self, at: directory.appendingPathComponent("summary.json"))
-        let quality = try decodeIfPresent(QualitySnapshot.self, at: directory.appendingPathComponent("quality_report.json"))
-        let modules = try decodeIfPresent([AnalyzerSnapshot].self, at: directory.appendingPathComponent("analysis_modules.json")) ?? []
         let session = try decodeIfPresent(SessionSnapshot.self, at: directory.appendingPathComponent("session.json"))
         let analysisRows = try parseAnalysisCSV(at: directory.appendingPathComponent("analysis.csv"))
-        let reportMarkdown = (try? String(contentsOf: directory.appendingPathComponent("report.md"), encoding: .utf8)) ?? ""
         let descriptor = trackDescriptor(for: fallbackTrackID, session: session)
 
         return (
@@ -240,11 +238,11 @@ struct PythonEngineBridge {
                 trackID: fallbackTrackID,
                 trackName: descriptor.name,
                 trackKind: descriptor.kind,
-                summary: summary,
-                quality: quality,
-                modules: modules,
+                summary: nil,
+                quality: nil,
+                modules: [],
                 analysisRows: analysisRows,
-                reportMarkdown: reportMarkdown,
+                reportMarkdown: "",
                 exportDirectory: directory
             ),
             session
@@ -325,61 +323,6 @@ struct PythonEngineBridge {
                 corrected: bool("corrected"),
                 state: value(parts, "state"),
                 failureReason: value(parts, "failure_reason")
-            )
-        }
-    }
-
-    private func parsePairwiseMetricsCSV(at url: URL) throws -> [PairwiseMetricSnapshot] {
-        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
-        let text = try String(contentsOf: url, encoding: .utf8)
-        let lines = text.split(whereSeparator: \.isNewline)
-        guard let headerLine = lines.first else { return [] }
-        let headers = headerLine.split(separator: ",").map(String.init)
-        let headerIndex = Dictionary(uniqueKeysWithValues: headers.enumerated().map { ($1, $0) })
-
-        func value(_ parts: [String], _ key: String) -> String {
-            guard let index = headerIndex[key], index < parts.count else { return "" }
-            return parts[index]
-        }
-
-        var grouped: [String: [PairwiseMetricSampleSnapshot]] = [:]
-        var descriptors: [String: (primary: String, secondary: String)] = [:]
-
-        for line in lines.dropFirst() {
-            let parts = line.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
-            guard
-                let frameIndex = Int(value(parts, "frame_index")),
-                let timeSeconds = Double(value(parts, "time_s")),
-                let distanceUnits = Double(value(parts, "distance_units")),
-                let relativeSpeedUnitsPerSecond = Double(value(parts, "relative_speed_units_s")),
-                let relativeDXUnits = Double(value(parts, "relative_dx_units")),
-                let relativeDYUnits = Double(value(parts, "relative_dy_units"))
-            else {
-                continue
-            }
-
-            let primary = value(parts, "primary_track_id")
-            let secondary = value(parts, "secondary_track_id")
-            let key = "\(primary)|\(secondary)"
-            descriptors[key] = (primary, secondary)
-            grouped[key, default: []].append(
-                PairwiseMetricSampleSnapshot(
-                    frameIndex: frameIndex,
-                    timeSeconds: timeSeconds,
-                    distanceUnits: distanceUnits,
-                    relativeSpeedUnitsPerSecond: relativeSpeedUnitsPerSecond,
-                    relativeDXUnits: relativeDXUnits,
-                    relativeDYUnits: relativeDYUnits
-                )
-            )
-        }
-
-        return grouped.keys.sorted().compactMap { key in
-            guard let descriptor = descriptors[key], let samples = grouped[key], !samples.isEmpty else { return nil }
-            return PairwiseMetricSnapshot(
-                primaryTrackID: descriptor.primary,
-                secondaryTrackID: descriptor.secondary,
-                samples: samples.sorted { $0.frameIndex < $1.frameIndex }
             )
         }
     }

@@ -1,0 +1,44 @@
+[
+  {
+    "path": "sample_data/projectile_sample.mp4",
+    "fps": 60.0,
+    "frameCount": 360,
+    "width": 960,
+    "height": 540,
+    "durationSeconds": 6.0,
+    "timestamps": {
+      "0": 0.0,
+      "1": 0.016666666666666666,
+      "15": 0.25,
+      "359": 5.983333333333333
+    }
+  },
+  {
+    "path": "sample_data/benchmarks/marker_blur_glare.mp4",
+    "fps": 30.0,
+    "frameCount": 90,
+    "width": 720,
+    "height": 420,
+    "durationSeconds": 3.0,
+    "timestamps": {
+      "0": 0.0,
+      "1": 0.03333333333333333,
+      "15": 0.5,
+      "89": 2.966666666666667
+    }
+  },
+  {
+    "path": "sample_data/benchmarks/marker_occlusion_reentry.mp4",
+    "fps": 30.0,
+    "frameCount": 96,
+    "width": 720,
+    "height": 420,
+    "durationSeconds": 3.2,
+    "timestamps": {
+      "0": 0.0,
+      "1": 0.03333333333333333,
+      "15": 0.5,
+      "95": 3.1666666666666665
+    }
+  }
+]

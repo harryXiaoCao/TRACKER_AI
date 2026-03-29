@@ -72,8 +72,18 @@ struct NativeScientificProcessor {
 
         let config = session.analysisConfig
         let times = rows.map(\.timeSeconds)
-        let rawX = rows.map { $0.rawXUnits ?? $0.xUnits }
-        let rawY = rows.map { $0.rawYUnits ?? $0.yUnits }
+        let calibrationProfile = try? session.calibration.makeCalibrationProfile()
+        let rawCoordinates = rows.map { row -> (Double, Double) in
+            if let rawXUnits = row.rawXUnits, let rawYUnits = row.rawYUnits {
+                return (rawXUnits, rawYUnits)
+            }
+            if let calibrationProfile, let xPixels = row.xPixels, let yPixels = row.yPixels {
+                return calibrationProfile.transformPoint(xPx: xPixels, yPx: yPixels)
+            }
+            return (row.xUnits, row.yUnits)
+        }
+        let rawX = rawCoordinates.map(\.0)
+        let rawY = rawCoordinates.map(\.1)
         let xUnits = smoothSeries(rawX, window: config.smoothingWindow, polyorder: config.smoothingPolyorder)
         let yUnits = smoothSeries(rawY, window: config.smoothingWindow, polyorder: config.smoothingPolyorder)
         let deltaX = zip(xUnits, rawX).map { lhs, rhs in lhs - rhs }
@@ -248,6 +258,291 @@ struct NativeScientificProcessor {
     }
 }
 
+struct NativeTrackingObservation {
+    var frameIndex: Int
+    var timeSeconds: Double
+    var centroidXPixels: Double
+    var centroidYPixels: Double
+    var bbox: BBoxSnapshot
+    var confidence: Double
+    var lost: Bool
+    var corrected: Bool
+    var state: String
+    var failureReason: String?
+    var source: String
+    var isInferred: Bool
+    var isInterpolated: Bool
+}
+
+struct NativeTrackReconstruction {
+    var trackID: String
+    var trackName: String
+    var trackKind: String
+    var observations: [NativeTrackingObservation]
+    var quality: TrackQualitySnapshot
+    var averageConfidence: Double
+
+    var observationByFrame: [Int: NativeTrackingObservation] {
+        Dictionary(uniqueKeysWithValues: observations.map { ($0.frameIndex, $0) })
+    }
+}
+
+struct NativeTrackingPipeline {
+    private let maxInterpolationGap = 3
+
+    func reconstructTrack(bundle: AnalysisTrackBundle, session: SessionSnapshot) -> NativeTrackReconstruction? {
+        let seedBox = seedBox(for: bundle, session: session)
+        guard !bundle.analysisRows.isEmpty else {
+            return NativeTrackReconstruction(
+                trackID: bundle.trackID,
+                trackName: bundle.trackName,
+                trackKind: bundle.trackKind,
+                observations: [],
+                quality: TrackQualitySnapshot(
+                    lostSpans: nil,
+                    suspectSpans: nil,
+                    correctedSpans: nil,
+                    reacquisitionCount: nil,
+                    reviewRecommended: nil
+                ),
+                averageConfidence: 0
+            )
+        }
+
+        let observations = bundle.analysisRows.map { row in
+            let centroidXPixels = row.xPixels ?? (seedBox.x + (seedBox.width / 2))
+            let centroidYPixels = row.yPixels ?? (seedBox.y + (seedBox.height / 2))
+            let bbox = BBoxSnapshot(
+                x: centroidXPixels - (seedBox.width / 2),
+                y: centroidYPixels - (seedBox.height / 2),
+                width: seedBox.width,
+                height: seedBox.height
+            )
+            return NativeTrackingObservation(
+                frameIndex: row.frameIndex,
+                timeSeconds: row.timeSeconds,
+                centroidXPixels: centroidXPixels,
+                centroidYPixels: centroidYPixels,
+                bbox: bbox,
+                confidence: row.trackerConfidence,
+                lost: row.lost,
+                corrected: row.corrected,
+                state: normalizedState(row.state, lost: row.lost),
+                failureReason: row.failureReason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : row.failureReason,
+                source: row.lost ? "predicted" : (row.corrected ? "manual_correction" : "measured"),
+                isInferred: row.lost,
+                isInterpolated: false
+            )
+        }
+
+        let interpolated = interpolateShortGaps(observations)
+        let quality = deriveTrackQuality(from: interpolated)
+        let averageConfidence = interpolated.map(\.confidence).mean()
+        return NativeTrackReconstruction(
+            trackID: bundle.trackID,
+            trackName: bundle.trackName,
+            trackKind: bundle.trackKind,
+            observations: interpolated,
+            quality: quality,
+            averageConfidence: averageConfidence
+        )
+    }
+
+    func deriveTrackQuality(from reconstruction: NativeTrackReconstruction) -> TrackQualitySnapshot {
+        reconstruction.quality
+    }
+
+    func deriveTrackQuality(for bundle: AnalysisTrackBundle, session: SessionSnapshot) -> TrackQualitySnapshot? {
+        reconstructTrack(bundle: bundle, session: session).map(\.quality)
+    }
+
+    func rebuildPairwiseMetrics(
+        tracks: [NativeTrackReconstruction],
+        analysesByTrackID: [String: [AnalysisRow]]
+    ) -> [PairwiseMetricSnapshot] {
+        let eligibleTracks = tracks
+            .filter { $0.trackKind != "reference" && !$0.observations.isEmpty }
+            .sorted { $0.trackID < $1.trackID }
+
+        guard eligibleTracks.count >= 2 else { return [] }
+
+        var metrics: [PairwiseMetricSnapshot] = []
+        for index in eligibleTracks.indices {
+            let primaryTrack = eligibleTracks[index]
+            guard index + 1 < eligibleTracks.count else { continue }
+            let primaryRowsByFrame = Dictionary(uniqueKeysWithValues: (analysesByTrackID[primaryTrack.trackID] ?? []).map { ($0.frameIndex, $0) })
+
+            for secondaryTrack in eligibleTracks[(index + 1)...] {
+                let secondaryRowsByFrame = Dictionary(uniqueKeysWithValues: (analysesByTrackID[secondaryTrack.trackID] ?? []).map { ($0.frameIndex, $0) })
+                let commonFrames = Array(Set(primaryTrack.observationByFrame.keys).intersection(secondaryTrack.observationByFrame.keys)).sorted()
+
+                let samples = commonFrames.compactMap { frameIndex -> PairwiseMetricSampleSnapshot? in
+                    guard
+                        let primaryRow = primaryRowsByFrame[frameIndex],
+                        let secondaryRow = secondaryRowsByFrame[frameIndex]
+                    else {
+                        return nil
+                    }
+
+                    let relativeDXUnits = secondaryRow.xUnits - primaryRow.xUnits
+                    let relativeDYUnits = secondaryRow.yUnits - primaryRow.yUnits
+                    let relativeVX = (secondaryRow.xVelocity ?? 0) - (primaryRow.xVelocity ?? 0)
+                    let relativeVY = (secondaryRow.yVelocity ?? 0) - (primaryRow.yVelocity ?? 0)
+                    return PairwiseMetricSampleSnapshot(
+                        frameIndex: frameIndex,
+                        timeSeconds: secondaryRow.timeSeconds,
+                        distanceUnits: sqrt((relativeDXUnits * relativeDXUnits) + (relativeDYUnits * relativeDYUnits)),
+                        relativeSpeedUnitsPerSecond: sqrt((relativeVX * relativeVX) + (relativeVY * relativeVY)),
+                        relativeDXUnits: relativeDXUnits,
+                        relativeDYUnits: relativeDYUnits
+                    )
+                }
+
+                guard !samples.isEmpty else { continue }
+                metrics.append(
+                    PairwiseMetricSnapshot(
+                        primaryTrackID: primaryTrack.trackID,
+                        secondaryTrackID: secondaryTrack.trackID,
+                        samples: samples
+                    )
+                )
+            }
+        }
+
+        return metrics.sorted { $0.id < $1.id }
+    }
+
+    private func seedBox(for bundle: AnalysisTrackBundle, session: SessionSnapshot) -> BBoxSnapshot {
+        if bundle.trackID == "primary" {
+            return session.initialBbox
+        }
+        if bundle.trackID == "reference", let reference = session.referenceBbox {
+            return reference
+        }
+        if let object = session.additionalObjects?.first(where: { $0.trackID == bundle.trackID }) {
+            return object.bbox
+        }
+        return session.initialBbox
+    }
+
+    private func interpolateShortGaps(_ observations: [NativeTrackingObservation]) -> [NativeTrackingObservation] {
+        guard observations.count >= 3 else { return observations }
+
+        var interpolated = observations
+        var index = 1
+        while index < interpolated.count - 1 {
+            if !interpolated[index].lost {
+                index += 1
+                continue
+            }
+
+            let start = index
+            var end = index
+            while end + 1 < interpolated.count && interpolated[end + 1].lost {
+                end += 1
+            }
+
+            let gap = end - start + 1
+            if gap > maxInterpolationGap || start == 0 || end >= interpolated.count - 1 {
+                index = end + 1
+                continue
+            }
+
+            let previous = interpolated[start - 1]
+            let following = interpolated[end + 1]
+            if previous.lost || following.lost {
+                index = end + 1
+                continue
+            }
+
+            for (offset, targetIndex) in Array(start...end).enumerated() {
+                let alpha = Double(offset + 1) / Double(gap + 1)
+                let bbox = BBoxSnapshot(
+                    x: (1 - alpha) * previous.bbox.x + alpha * following.bbox.x,
+                    y: (1 - alpha) * previous.bbox.y + alpha * following.bbox.y,
+                    width: (1 - alpha) * previous.bbox.width + alpha * following.bbox.width,
+                    height: (1 - alpha) * previous.bbox.height + alpha * following.bbox.height
+                )
+                interpolated[targetIndex] = NativeTrackingObservation(
+                    frameIndex: interpolated[targetIndex].frameIndex,
+                    timeSeconds: interpolated[targetIndex].timeSeconds,
+                    centroidXPixels: (1 - alpha) * previous.centroidXPixels + alpha * following.centroidXPixels,
+                    centroidYPixels: (1 - alpha) * previous.centroidYPixels + alpha * following.centroidYPixels,
+                    bbox: bbox,
+                    confidence: min(previous.confidence, following.confidence) * 0.72,
+                    lost: false,
+                    corrected: interpolated[targetIndex].corrected,
+                    state: "suspect",
+                    failureReason: "short_gap_interpolated",
+                    source: "interpolated",
+                    isInferred: true,
+                    isInterpolated: true
+                )
+            }
+
+            index = end + 1
+        }
+
+        return interpolated
+    }
+
+    private func deriveTrackQuality(from observations: [NativeTrackingObservation]) -> TrackQualitySnapshot {
+        let lostSpans = buildSpans(from: observations, reason: "lost_tracking") { $0.lost }
+        let suspectSpans = buildSpans(from: observations, reason: "tracking_recovery") {
+            $0.state == "suspect" || $0.state == "reacquired"
+        }
+        let correctedSpans = buildSpans(from: observations, reason: "manual_correction") { $0.corrected }
+        let reacquisitionCount = observations.filter { $0.state == "reacquired" }.count
+        let reviewRecommended = !lostSpans.isEmpty || !suspectSpans.isEmpty || observations.contains { $0.confidence < 0.35 }
+        return TrackQualitySnapshot(
+            lostSpans: lostSpans,
+            suspectSpans: suspectSpans,
+            correctedSpans: correctedSpans,
+            reacquisitionCount: reacquisitionCount,
+            reviewRecommended: reviewRecommended
+        )
+    }
+
+    private func buildSpans(
+        from observations: [NativeTrackingObservation],
+        reason: String,
+        predicate: (NativeTrackingObservation) -> Bool
+    ) -> [TrackSpanSnapshot] {
+        var spans: [TrackSpanSnapshot] = []
+        var startFrame: Int?
+        var endFrame: Int?
+
+        for observation in observations {
+            let isActive = predicate(observation)
+            if isActive && startFrame == nil {
+                startFrame = observation.frameIndex
+            }
+            if isActive {
+                endFrame = observation.frameIndex
+            }
+            if !isActive, let resolvedStart = startFrame, let resolvedEnd = endFrame {
+                spans.append(TrackSpanSnapshot(startFrame: resolvedStart, endFrame: resolvedEnd, reason: reason))
+                startFrame = nil
+                endFrame = nil
+            }
+        }
+
+        if let startFrame, let endFrame {
+            spans.append(TrackSpanSnapshot(startFrame: startFrame, endFrame: endFrame, reason: reason))
+        }
+
+        return spans
+    }
+
+    private func normalizedState(_ state: String, lost: Bool) -> String {
+        let trimmed = state.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !trimmed.isEmpty {
+            return trimmed
+        }
+        return lost ? "lost" : "tracking"
+    }
+}
+
 struct NativeResearchBundleExporter {
     func export(_ payload: NativeResearchBundlePayload) throws -> [String: URL] {
         let directory = payload.outputDirectory
@@ -298,6 +593,7 @@ struct NativeResearchBundleExporter {
             quality: quality,
             classification: classification,
             modules: modules,
+            pairwiseMetrics: payload.pairwiseMetrics,
             eventMarkers: mergedEvents,
             reproduceCommand: reproduceCommand
         )
@@ -317,6 +613,7 @@ struct NativeResearchBundleExporter {
         let modulesURL = directory.appendingPathComponent("analysis_modules.json")
         let windowURL = directory.appendingPathComponent("selected_window_summary.json")
         let analysisURL = directory.appendingPathComponent("analysis.csv")
+        let pairwiseURL = directory.appendingPathComponent("pairwise_metrics.csv")
         let reportURL = directory.appendingPathComponent("report.md")
         let reproduceURL = directory.appendingPathComponent("reproduce_command.sh")
 
@@ -331,6 +628,7 @@ struct NativeResearchBundleExporter {
         try encoder.encode(modules).write(to: modulesURL)
         try buildEventsCSV(mergedEvents).write(to: eventsURL, atomically: true, encoding: .utf8)
         try buildAnalysisSnapshotCSV(payload.analysisRows).write(to: analysisURL, atomically: true, encoding: .utf8)
+        try buildPairwiseMetricsCSV(payload.pairwiseMetrics).write(to: pairwiseURL, atomically: true, encoding: .utf8)
         try reportMarkdown.write(to: reportURL, atomically: true, encoding: .utf8)
         try (reproduceCommand + "\n").write(to: reproduceURL, atomically: true, encoding: .utf8)
 
@@ -365,6 +663,7 @@ struct NativeResearchBundleExporter {
             "summary": summaryURL,
             "quality": qualityURL,
             "modules": modulesURL,
+            "pairwise": pairwiseURL,
             "report": reportURL,
             "reproduce": reproduceURL,
             "window_summary": windowURL,
@@ -674,6 +973,29 @@ struct NativeResearchBundleExporter {
         return lines.joined(separator: "\n") + "\n"
     }
 
+    private func buildPairwiseMetricsCSV(_ metrics: [PairwiseMetricSnapshot]) -> String {
+        let header = [
+            "primary_track_id", "secondary_track_id", "frame_index", "time_s",
+            "distance_units", "relative_speed_units_s", "relative_dx_units", "relative_dy_units",
+        ]
+        var lines = [header.joined(separator: ",")]
+        for metric in metrics.sorted(by: { $0.id < $1.id }) {
+            lines.append(contentsOf: metric.samples.sorted(by: { $0.frameIndex < $1.frameIndex }).map { sample in
+                [
+                    csv(metric.primaryTrackID),
+                    csv(metric.secondaryTrackID),
+                    String(sample.frameIndex),
+                    format(sample.timeSeconds),
+                    format(sample.distanceUnits),
+                    format(sample.relativeSpeedUnitsPerSecond),
+                    format(sample.relativeDXUnits),
+                    format(sample.relativeDYUnits),
+                ].joined(separator: ",")
+            })
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+
     private func csv(_ value: String) -> String {
         let escaped = value.replacingOccurrences(of: "\"", with: "\"\"")
         return "\"\(escaped)\""
@@ -694,6 +1016,48 @@ struct NativeResearchBundleExporter {
 }
 
 struct NativeResearchReporter {
+    func rebuildPairwiseMetrics(trackBundles: [AnalysisTrackBundle]) -> [PairwiseMetricSnapshot] {
+        let eligibleBundles = trackBundles
+            .filter { $0.trackKind != "reference" && !$0.analysisRows.isEmpty }
+            .sorted { $0.trackID < $1.trackID }
+
+        guard eligibleBundles.count >= 2 else { return [] }
+
+        var metrics: [PairwiseMetricSnapshot] = []
+        for index in eligibleBundles.indices {
+            let primaryBundle = eligibleBundles[index]
+            let primaryRows = Dictionary(uniqueKeysWithValues: primaryBundle.analysisRows.map { ($0.frameIndex, $0) })
+            guard index + 1 < eligibleBundles.count else { continue }
+            for secondaryBundle in eligibleBundles[(index + 1)...] {
+                let samples = secondaryBundle.analysisRows.compactMap { secondaryRow -> PairwiseMetricSampleSnapshot? in
+                    guard let primaryRow = primaryRows[secondaryRow.frameIndex] else { return nil }
+                    let relativeDXUnits = secondaryRow.xUnits - primaryRow.xUnits
+                    let relativeDYUnits = secondaryRow.yUnits - primaryRow.yUnits
+                    let relativeVX = (secondaryRow.xVelocity ?? 0) - (primaryRow.xVelocity ?? 0)
+                    let relativeVY = (secondaryRow.yVelocity ?? 0) - (primaryRow.yVelocity ?? 0)
+                    return PairwiseMetricSampleSnapshot(
+                        frameIndex: secondaryRow.frameIndex,
+                        timeSeconds: secondaryRow.timeSeconds,
+                        distanceUnits: sqrt((relativeDXUnits * relativeDXUnits) + (relativeDYUnits * relativeDYUnits)),
+                        relativeSpeedUnitsPerSecond: sqrt((relativeVX * relativeVX) + (relativeVY * relativeVY)),
+                        relativeDXUnits: relativeDXUnits,
+                        relativeDYUnits: relativeDYUnits
+                    )
+                }
+                guard !samples.isEmpty else { continue }
+                metrics.append(
+                    PairwiseMetricSnapshot(
+                        primaryTrackID: primaryBundle.trackID,
+                        secondaryTrackID: secondaryBundle.trackID,
+                        samples: samples.sorted { $0.frameIndex < $1.frameIndex }
+                    )
+                )
+            }
+        }
+
+        return metrics.sorted { $0.id < $1.id }
+    }
+
     func buildSummary(
         session: SessionSnapshot,
         rows: [AnalysisRow],
@@ -1241,6 +1605,7 @@ struct NativeResearchReporter {
         quality: QualitySnapshot,
         classification: ExperimentClassificationSnapshot,
         modules: [AnalyzerSnapshot],
+        pairwiseMetrics: [PairwiseMetricSnapshot],
         eventMarkers: [EventMarkerRecord],
         reproduceCommand: String
     ) -> String {
@@ -1375,6 +1740,23 @@ struct NativeResearchReporter {
         }.joined(separator: "\n") ?? "")
         """ : ""
 
+        let pairwiseSection: String = {
+            let relevantMetrics = pairwiseMetrics
+                .filter { $0.primaryTrackID == trackID || $0.secondaryTrackID == trackID }
+                .sorted { $0.minimumSeparation < $1.minimumSeparation }
+            guard !relevantMetrics.isEmpty else { return "" }
+            return """
+
+            ## Pairwise Metrics
+
+            \(relevantMetrics.map { metric in
+                let counterpart = metric.primaryTrackID == trackID ? metric.secondaryTrackID : metric.primaryTrackID
+                let collision = metric.collisionFrame.map(String.init) ?? "none"
+                return "- `\(trackID)` vs `\(counterpart)`: min separation `\(format(summaryValue: metric.minimumSeparation)) \(session.calibration.unitLabel)`, mean separation `\(format(summaryValue: metric.meanSeparation)) \(session.calibration.unitLabel)`, peak relative speed `\(format(summaryValue: metric.peakRelativeSpeed)) \(session.calibration.unitLabel)/s`, collision frame `\(collision)`"
+            }.joined(separator: "\n"))
+            """
+        }()
+
         let spanSection = (quality.spanScores?.isEmpty == false) ? """
 
         ## Native Span Severity Ledger
@@ -1392,7 +1774,7 @@ struct NativeResearchReporter {
 
         switch session.exportPreferences?.reportTemplate ?? "research" {
         case "compact":
-            return baseSummary + classificationSection + windowSection + qualitySection + anomalySection
+            return baseSummary + classificationSection + windowSection + qualitySection + pairwiseSection + anomalySection
         case "guided":
             return baseSummary
             + """
@@ -1406,12 +1788,13 @@ struct NativeResearchReporter {
             + classificationSection
             + windowSection
             + qualitySection
+            + pairwiseSection
             + anomalySection
             + spanSection
             + analyzerSection
             + eventsSection
         default:
-            return baseSummary + reproduceSection + classificationSection + windowSection + qualitySection + anomalySection + spanSection + analyzerSection + eventsSection
+            return baseSummary + reproduceSection + classificationSection + windowSection + qualitySection + pairwiseSection + anomalySection + spanSection + analyzerSection + eventsSection
         }
     }
 
