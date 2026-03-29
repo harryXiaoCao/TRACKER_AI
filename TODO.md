@@ -117,11 +117,12 @@ The goal of the next migration phase should be to eliminate `PythonEngineBridge.
 
 ### 06. Port single-object tracker runtime from Python/OpenCV to Swift
 
-- [ ] Reimplement the `RobustHybridTracker` core in Swift.
-- [ ] Cover template matching, motion prediction, patch extraction, scoring, and state transitions.
-- [ ] Match Python output fields closely enough to preserve downstream scientific calculations.
-- [ ] Keep the tracker modular so future detector-assisted recovery can slot in cleanly.
-- [ ] Define acceptable parity targets against the benchmark clips before replacing Python in production.
+- [x] Reimplement the `RobustHybridTracker` core in Swift.
+- [x] Cover template matching, motion prediction, patch extraction, scoring, and state transitions.
+- [x] Match Python output fields closely enough to preserve downstream scientific calculations.
+- [x] Keep the tracker modular so future detector-assisted recovery can slot in cleanly.
+- [x] Define acceptable parity targets against the benchmark clips before replacing Python in production.
+  Native runtime work now lives in `Sources/TrackerAIMac/Core/NativeTrackingRuntime.swift`, with modular candidate providers for template-grid and foreground search, and the current benchmark release gate codified in `tests/TrackerAIMacTests/NativeTrackingRuntimeTests.swift` via `NativeTrackingParityTargets`.
 
 ### 07. Port recovery, reacquisition, and tracker state logic
 

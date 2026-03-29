@@ -145,7 +145,28 @@ final class NativeVideoSource {
                 image: image
             )
         } catch {
-            throw NativeVideoSourceError.unreadableFrame(frameIndex)
+            let relaxedTolerance = CMTime(
+                seconds: max(metadata.nominalFrameDurationSeconds, 1.0 / max(metadata.fps, 1.0)),
+                preferredTimescale: 600
+            )
+            imageGenerator.requestedTimeToleranceBefore = relaxedTolerance
+            imageGenerator.requestedTimeToleranceAfter = relaxedTolerance
+            defer {
+                imageGenerator.requestedTimeToleranceBefore = .zero
+                imageGenerator.requestedTimeToleranceAfter = .zero
+            }
+
+            do {
+                var actualTime = CMTime.zero
+                let image = try imageGenerator.copyCGImage(at: time, actualTime: &actualTime)
+                return NativeVideoFrame(
+                    frameIndex: frameIndex,
+                    timestamp: try frameTimestamp(forFrameIndex: frameIndex),
+                    image: image
+                )
+            } catch {
+                throw NativeVideoSourceError.unreadableFrame(frameIndex)
+            }
         }
     }
 

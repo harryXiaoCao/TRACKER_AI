@@ -272,6 +272,10 @@ struct NativeTrackingObservation {
     var source: String
     var isInferred: Bool
     var isInterpolated: Bool
+    var debug: [String: String] = [:]
+    var trackID: String = "primary"
+    var trackName: String = "Primary Object"
+    var trackKind: String = "primary"
 }
 
 struct NativeTrackReconstruction {
