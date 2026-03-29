@@ -54,10 +54,40 @@ def _parse_args() -> argparse.Namespace:
         help="Export per-frame tracking state and score details.",
     )
     analyze.add_argument(
+        "--disable-robust-recovery",
+        action="store_true",
+        help="Disable wider search and recovery passes when confidence drops.",
+    )
+    analyze.add_argument(
         "--disable-bidirectional-refinement",
         action="store_true",
         help="Disable the offline backward refinement pass.",
     )
+    analyze.add_argument("--search-margin", type=float, default=2.4, help="Normal search-window expansion multiplier.")
+    analyze.add_argument("--expanded-search-margin", type=float, default=5.5, help="Expanded recovery search-window multiplier.")
+    analyze.add_argument(
+        "--scale-factors",
+        nargs="+",
+        type=float,
+        default=[0.9, 1.0, 1.1],
+        help="Template matching scale factors.",
+    )
+    analyze.add_argument("--detection-threshold", type=float, default=0.50, help="Confidence threshold for accepting a tracked match.")
+    analyze.add_argument("--low-confidence-threshold", type=float, default=0.36, help="Lower bound for suspect matches during recovery.")
+    analyze.add_argument("--reacquire-threshold", type=float, default=0.56, help="Confidence needed to exit lost-state recovery.")
+    analyze.add_argument("--suspect-after-frames", type=int, default=3, help="Frames of degraded tracking before entering suspect state.")
+    analyze.add_argument("--recovery-after-frames", type=int, default=5, help="Frames of degraded tracking before expanded recovery begins.")
+    analyze.add_argument("--max-prediction-frames", type=int, default=8, help="How long motion-only prediction can bridge missing detections.")
+    analyze.add_argument("--template-update-rate", type=float, default=0.10, help="Blend rate for short-term template updates.")
+    analyze.add_argument("--stable-update-threshold", type=float, default=0.66, help="Confidence threshold required before updating templates.")
+    analyze.add_argument("--marker-confidence-bias", type=float, default=0.58, help="Marker-score weighting bias for marker-like targets.")
+    analyze.add_argument("--auto-marker-min-ratio", type=float, default=0.12, help="Marker ratio required for auto profile promotion.")
+    analyze.add_argument(
+        "--disable-interpolate-short-gaps",
+        action="store_true",
+        help="Disable short-gap interpolation between confident observations.",
+    )
+    analyze.add_argument("--max-interpolation-gap", type=int, default=3, help="Maximum lost-frame gap eligible for interpolation.")
     analyze.add_argument(
         "--skip-overlay",
         action="store_true",
@@ -103,8 +133,24 @@ def run_analysis(args: argparse.Namespace) -> int:
     config = AnalysisConfig(smoothing_window=args.window, smoothing_polyorder=args.polyorder)
     tracking_config = TrackingConfig(
         profile=TrackingProfile(args.tracking_profile),
+        robust_recovery=not args.disable_robust_recovery,
         bidirectional_refinement=not args.disable_bidirectional_refinement,
         debug_tracking=bool(args.debug_tracking),
+        search_margin=float(args.search_margin),
+        expanded_search_margin=float(args.expanded_search_margin),
+        scale_factors=tuple(float(value) for value in args.scale_factors),
+        detection_threshold=float(args.detection_threshold),
+        low_confidence_threshold=float(args.low_confidence_threshold),
+        reacquire_threshold=float(args.reacquire_threshold),
+        suspect_after_frames=int(args.suspect_after_frames),
+        recovery_after_frames=int(args.recovery_after_frames),
+        max_prediction_frames=int(args.max_prediction_frames),
+        template_update_rate=float(args.template_update_rate),
+        stable_update_threshold=float(args.stable_update_threshold),
+        marker_confidence_bias=float(args.marker_confidence_bias),
+        auto_marker_min_ratio=float(args.auto_marker_min_ratio),
+        interpolate_short_gaps=not args.disable_interpolate_short_gaps,
+        max_interpolation_gap=int(args.max_interpolation_gap),
     )
     scale_points = tuple(float(value) for value in args.scale_points)
     reference_bbox = BBox(*args.reference_bbox) if args.reference_bbox else None

@@ -38,6 +38,8 @@ final class AppModel {
     var smoothingWindow = "7"
     var polyorder = "2"
     var trackingProfile: TrackingProfileOption = .auto
+    var trackingRobustRecovery = true
+    var trackingBidirectionalRefinement = true
     var debugTracking = false
     var includeOverlay = true
     var includePlots = true
@@ -129,6 +131,7 @@ final class AppModel {
     private let nativeScientificReporter = NativeResearchReporter()
     private var currentVideoSource: NativeVideoSource?
     private var pendingVideoLoadID = UUID()
+    private var internalTrackingConfig = TrackingConfigSnapshot.pythonDefaults
 
     init() {
         bootstrapWorkspace()
@@ -195,6 +198,12 @@ final class AppModel {
         })
         markers.append(contentsOf: allEvents.prefix(6).map { "event \($0.name)@\($0.frameIndex)" })
         return markers
+    }
+    var trackingControlsSummary: String {
+        "User-facing in Swift: profile, robust recovery, bidirectional refinement, and debug export."
+    }
+    var internalTrackingControlsSummary: String {
+        "Session-persistent but internal-only for now: search margins, thresholds, interpolation, scale factors, template update tuning, and marker confidence bias."
     }
     var windowSummary: WindowStatsSnapshot? {
         guard !analysisRows.isEmpty else { return nil }
@@ -905,6 +914,7 @@ final class AppModel {
             endFrame: endFrame >= startFrame ? endFrame : nil,
             smoothingWindow: Int(smoothingWindow) ?? 7,
             polyorder: Int(polyorder) ?? 2,
+            trackingConfig: resolvedTrackingConfigSnapshot(),
             trackingProfile: trackingProfile,
             debugTracking: debugTracking,
             includeOverlay: includeOverlay,
@@ -958,8 +968,8 @@ final class AppModel {
         calibrationPixelDistanceInput = formattedCalibrationInput(session.calibration.pixelDistance)
         smoothingWindow = String(session.analysisConfig.smoothingWindow)
         polyorder = String(session.analysisConfig.smoothingPolyorder)
-        trackingProfile = session.trackingConfig?.profile ?? trackingProfile
-        debugTracking = session.exportPreferences?.includeDebugTracking ?? session.trackingConfig?.debugTracking ?? debugTracking
+        applyTrackingConfig(session.trackingConfig)
+        debugTracking = session.exportPreferences?.includeDebugTracking ?? debugTracking
         includeOverlay = session.exportPreferences?.includeOverlay ?? includeOverlay
         includePlots = session.exportPreferences?.includePlots ?? includePlots
         reportTemplate = session.exportPreferences?.reportTemplate ?? reportTemplate
@@ -1502,12 +1512,7 @@ final class AppModel {
                 smoothingWindow: Int(smoothingWindow) ?? 7,
                 smoothingPolyorder: Int(polyorder) ?? 2
             ),
-            trackingConfig: TrackingConfigSnapshot(
-                profile: trackingProfile,
-                robustRecovery: true,
-                bidirectionalRefinement: true,
-                debugTracking: debugTracking
-            ),
+            trackingConfig: resolvedTrackingConfigSnapshot(),
             metadata: ExperimentMetadataSnapshot(
                 experimentLabel: experimentLabel,
                 trialID: trialID,
@@ -1812,9 +1817,16 @@ final class AppModel {
     private func nativeReproduceCommand(for session: SessionSnapshot, outputDirectory: URL) -> String {
         let overlayFlag = (session.exportPreferences?.includeOverlay ?? includeOverlay) ? "" : " --skip-overlay"
         let plotFlag = (session.exportPreferences?.includePlots ?? includePlots) ? "" : " --skip-plots"
-        let debugFlag = (session.exportPreferences?.includeDebugTracking ?? debugTracking) ? " --debug-tracking" : ""
+        let trackingConfig = session.resolvedTrackingConfig
+        let debugFlag = (session.exportPreferences?.includeDebugTracking ?? trackingConfig.debugTracking ?? debugTracking) ? " --debug-tracking" : ""
+        let robustRecoveryFlag = (trackingConfig.robustRecovery ?? true) ? "" : " --disable-robust-recovery"
+        let bidirectionalFlag = (trackingConfig.bidirectionalRefinement ?? true) ? "" : " --disable-bidirectional-refinement"
+        let interpolationFlag = (trackingConfig.interpolateShortGaps ?? true) ? "" : " --disable-interpolate-short-gaps"
+        let scaleFactors = (trackingConfig.scaleFactors ?? TrackingConfigSnapshot.pythonDefaults.scaleFactors ?? []).map { String($0) }.joined(separator: " ")
         let report = session.exportPreferences?.reportTemplate ?? reportTemplate
-        return "python3 -m tracker_ai.cli analyze --video \(session.videoPath) --output-dir \(outputDirectory.path)\(overlayFlag)\(plotFlag)\(debugFlag) --report-template \(report)"
+        return """
+        python3 -m tracker_ai.cli analyze --video \(session.videoPath) --output-dir \(outputDirectory.path)\(overlayFlag)\(plotFlag)\(debugFlag)\(robustRecoveryFlag)\(bidirectionalFlag)\(interpolationFlag) --report-template \(report) --tracking-profile \((trackingConfig.profile ?? .auto).rawValue) --search-margin \(trackingConfig.searchMargin ?? 2.4) --expanded-search-margin \(trackingConfig.expandedSearchMargin ?? 5.5) --scale-factors \(scaleFactors) --detection-threshold \(trackingConfig.detectionThreshold ?? 0.5) --low-confidence-threshold \(trackingConfig.lowConfidenceThreshold ?? 0.36) --reacquire-threshold \(trackingConfig.reacquireThreshold ?? 0.56) --suspect-after-frames \(trackingConfig.suspectAfterFrames ?? 3) --recovery-after-frames \(trackingConfig.recoveryAfterFrames ?? 5) --max-prediction-frames \(trackingConfig.maxPredictionFrames ?? 8) --template-update-rate \(trackingConfig.templateUpdateRate ?? 0.1) --stable-update-threshold \(trackingConfig.stableUpdateThreshold ?? 0.66) --marker-confidence-bias \(trackingConfig.markerConfidenceBias ?? 0.58) --auto-marker-min-ratio \(trackingConfig.autoMarkerMinRatio ?? 0.12) --max-interpolation-gap \(trackingConfig.maxInterpolationGap ?? 3)
+        """
     }
 
     private func sessionByUpdatingTrackQuality(_ session: SessionSnapshot, trackQuality: TrackQualitySnapshot?) -> SessionSnapshot {
@@ -2154,8 +2166,9 @@ final class AppModel {
             endFrame: session.selectedEndFrame,
             smoothingWindow: session.analysisConfig.smoothingWindow,
             polyorder: session.analysisConfig.smoothingPolyorder,
-            trackingProfile: session.trackingConfig?.profile ?? .auto,
-            debugTracking: session.exportPreferences?.includeDebugTracking ?? session.trackingConfig?.debugTracking ?? false,
+            trackingConfig: session.resolvedTrackingConfig,
+            trackingProfile: session.resolvedTrackingConfig.profile ?? .auto,
+            debugTracking: session.exportPreferences?.includeDebugTracking ?? session.resolvedTrackingConfig.debugTracking ?? false,
             includeOverlay: session.exportPreferences?.includeOverlay ?? true,
             includePlots: session.exportPreferences?.includePlots ?? true,
             reportTemplate: session.exportPreferences?.reportTemplate ?? reportTemplate,
@@ -2232,7 +2245,7 @@ final class AppModel {
             eventMarkers: eventMarkers(from: session),
             outputDirectory: result.exportDirectory,
             reportTemplate: session.exportPreferences?.reportTemplate ?? reportTemplate,
-            trackingProfile: session.trackingConfig?.profile ?? trackingProfile,
+            trackingProfile: session.resolvedTrackingConfig.profile ?? trackingProfile,
             includeOverlay: session.exportPreferences?.includeOverlay ?? includeOverlay,
             includePlots: session.exportPreferences?.includePlots ?? includePlots,
             debugTracking: session.exportPreferences?.includeDebugTracking ?? debugTracking,
@@ -2261,6 +2274,23 @@ final class AppModel {
                 origin: origin
             )
         }
+    }
+
+    private func applyTrackingConfig(_ snapshot: TrackingConfigSnapshot?) {
+        internalTrackingConfig = (snapshot ?? .pythonDefaults).resolved()
+        trackingProfile = internalTrackingConfig.profile ?? .auto
+        trackingRobustRecovery = internalTrackingConfig.robustRecovery ?? true
+        trackingBidirectionalRefinement = internalTrackingConfig.bidirectionalRefinement ?? true
+        debugTracking = internalTrackingConfig.debugTracking ?? false
+    }
+
+    private func resolvedTrackingConfigSnapshot() -> TrackingConfigSnapshot {
+        var snapshot = internalTrackingConfig.resolved()
+        snapshot.profile = trackingProfile
+        snapshot.robustRecovery = trackingRobustRecovery
+        snapshot.bidirectionalRefinement = trackingBidirectionalRefinement
+        snapshot.debugTracking = debugTracking
+        return snapshot
     }
 
     private func sanitizedTrialName(for session: SessionSnapshot, fallbackIndex: Int) -> String {

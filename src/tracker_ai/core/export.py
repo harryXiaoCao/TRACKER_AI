@@ -221,10 +221,28 @@ def build_reproduce_command(session: ProjectSession) -> str:
         bbox = item.bbox
         command.append(f"--extra-object {item.track_id} \"{item.name}\" {bbox.x:g} {bbox.y:g} {bbox.width:g} {bbox.height:g}")
     command.append(f"--tracking-profile {session.tracking_config.profile.value}")
+    command.append(f"--search-margin {session.tracking_config.search_margin:g}")
+    command.append(f"--expanded-search-margin {session.tracking_config.expanded_search_margin:g}")
+    command.append("--scale-factors " + " ".join(f"{value:g}" for value in session.tracking_config.scale_factors))
+    command.append(f"--detection-threshold {session.tracking_config.detection_threshold:g}")
+    command.append(f"--low-confidence-threshold {session.tracking_config.low_confidence_threshold:g}")
+    command.append(f"--reacquire-threshold {session.tracking_config.reacquire_threshold:g}")
+    command.append(f"--suspect-after-frames {session.tracking_config.suspect_after_frames}")
+    command.append(f"--recovery-after-frames {session.tracking_config.recovery_after_frames}")
+    command.append(f"--max-prediction-frames {session.tracking_config.max_prediction_frames}")
+    command.append(f"--template-update-rate {session.tracking_config.template_update_rate:g}")
+    command.append(f"--stable-update-threshold {session.tracking_config.stable_update_threshold:g}")
+    command.append(f"--marker-confidence-bias {session.tracking_config.marker_confidence_bias:g}")
+    command.append(f"--auto-marker-min-ratio {session.tracking_config.auto_marker_min_ratio:g}")
+    command.append(f"--max-interpolation-gap {session.tracking_config.max_interpolation_gap}")
     if session.tracking_config.debug_tracking:
         command.append("--debug-tracking")
+    if not session.tracking_config.robust_recovery:
+        command.append("--disable-robust-recovery")
     if not session.tracking_config.bidirectional_refinement:
         command.append("--disable-bidirectional-refinement")
+    if not session.tracking_config.interpolate_short_gaps:
+        command.append("--disable-interpolate-short-gaps")
     command.append("--output-dir <output-dir>")
     return " \\\n  ".join(command)
 

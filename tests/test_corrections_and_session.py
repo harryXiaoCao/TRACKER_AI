@@ -4,6 +4,7 @@ from pathlib import Path
 
 from tracker_ai.core.analysis import AnalysisConfig
 from tracker_ai.core.calibration import CalibrationProfile
+from tracker_ai.core.export import build_reproduce_command
 from tracker_ai.core.session import EventMarker, ExportPreferences, ExperimentMetadata, ProjectSession, ProvenanceMetadata, SessionReviewState
 from tracker_ai.core.tracking import (
     BBox,
@@ -63,7 +64,27 @@ def test_project_session_round_trips_corrections_and_quality(tmp_path: Path):
         reference_bbox=BBox(5, 6, 7, 8),
         calibration=CalibrationProfile(reference_length=1.0, unit_label="m", pixel_distance=100.0),
         analysis_config=AnalysisConfig(),
-        tracking_config=TrackingConfig(profile=TrackingProfile.MARKER, robust_recovery=True),
+        tracking_config=TrackingConfig(
+            profile=TrackingProfile.MARKER,
+            robust_recovery=False,
+            bidirectional_refinement=False,
+            debug_tracking=True,
+            search_margin=3.1,
+            expanded_search_margin=7.4,
+            scale_factors=(0.85, 1.0, 1.2),
+            detection_threshold=0.61,
+            low_confidence_threshold=0.42,
+            reacquire_threshold=0.68,
+            suspect_after_frames=4,
+            recovery_after_frames=7,
+            max_prediction_frames=10,
+            template_update_rate=0.14,
+            stable_update_threshold=0.73,
+            marker_confidence_bias=0.62,
+            auto_marker_min_ratio=0.18,
+            interpolate_short_gaps=False,
+            max_interpolation_gap=5,
+        ),
         metadata=ExperimentMetadata(
             experiment_label="Pendulum Study",
             trial_id="trial-03",
@@ -97,6 +118,24 @@ def test_project_session_round_trips_corrections_and_quality(tmp_path: Path):
     assert loaded.selected_end_frame == 40
     assert loaded.reference_bbox == BBox(5, 6, 7, 8)
     assert loaded.tracking_config.profile == TrackingProfile.MARKER
+    assert loaded.tracking_config.robust_recovery is False
+    assert loaded.tracking_config.bidirectional_refinement is False
+    assert loaded.tracking_config.debug_tracking is True
+    assert loaded.tracking_config.search_margin == 3.1
+    assert loaded.tracking_config.expanded_search_margin == 7.4
+    assert loaded.tracking_config.scale_factors == (0.85, 1.0, 1.2)
+    assert loaded.tracking_config.detection_threshold == 0.61
+    assert loaded.tracking_config.low_confidence_threshold == 0.42
+    assert loaded.tracking_config.reacquire_threshold == 0.68
+    assert loaded.tracking_config.suspect_after_frames == 4
+    assert loaded.tracking_config.recovery_after_frames == 7
+    assert loaded.tracking_config.max_prediction_frames == 10
+    assert loaded.tracking_config.template_update_rate == 0.14
+    assert loaded.tracking_config.stable_update_threshold == 0.73
+    assert loaded.tracking_config.marker_confidence_bias == 0.62
+    assert loaded.tracking_config.auto_marker_min_ratio == 0.18
+    assert loaded.tracking_config.interpolate_short_gaps is False
+    assert loaded.tracking_config.max_interpolation_gap == 5
     assert loaded.metadata.experiment_label == "Pendulum Study"
     assert loaded.metadata.tags == ("pendulum", "baseline")
     assert loaded.corrections and loaded.corrections[0].frame_index == 15
@@ -108,3 +147,22 @@ def test_project_session_round_trips_corrections_and_quality(tmp_path: Path):
     assert loaded.export_preferences.include_debug_tracking is True
     assert loaded.provenance.video_path_snapshot == "demo.mp4"
     assert loaded.additional_objects and loaded.additional_objects[0].track_id == "marker"
+
+    reproduce_command = build_reproduce_command(loaded)
+    assert "--disable-robust-recovery" in reproduce_command
+    assert "--disable-bidirectional-refinement" in reproduce_command
+    assert "--disable-interpolate-short-gaps" in reproduce_command
+    assert "--search-margin 3.1" in reproduce_command
+    assert "--expanded-search-margin 7.4" in reproduce_command
+    assert "--scale-factors 0.85 1 1.2" in reproduce_command
+    assert "--detection-threshold 0.61" in reproduce_command
+    assert "--low-confidence-threshold 0.42" in reproduce_command
+    assert "--reacquire-threshold 0.68" in reproduce_command
+    assert "--suspect-after-frames 4" in reproduce_command
+    assert "--recovery-after-frames 7" in reproduce_command
+    assert "--max-prediction-frames 10" in reproduce_command
+    assert "--template-update-rate 0.14" in reproduce_command
+    assert "--stable-update-threshold 0.73" in reproduce_command
+    assert "--marker-confidence-bias 0.62" in reproduce_command
+    assert "--auto-marker-min-ratio 0.18" in reproduce_command
+    assert "--max-interpolation-gap 5" in reproduce_command

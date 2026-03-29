@@ -107,6 +107,7 @@ struct PythonEngineBridge {
     func runAnalysis(config: NativeRunConfiguration) async throws -> AnalysisLoadResult {
         let root = try repositoryRoot()
         try FileManager.default.createDirectory(at: config.outputDirectory, withIntermediateDirectories: true)
+        let trackingConfig = config.trackingConfig.resolved()
 
         var arguments = [
             "-m", "tracker_ai.cli",
@@ -121,7 +122,23 @@ struct PythonEngineBridge {
             "--window", String(config.smoothingWindow),
             "--polyorder", String(config.polyorder),
             "--tracking-profile", config.trackingProfile.rawValue,
+            "--search-margin", String(trackingConfig.searchMargin ?? 2.4),
+            "--expanded-search-margin", String(trackingConfig.expandedSearchMargin ?? 5.5),
+            "--scale-factors",
         ]
+        let scaleFactorArguments = (trackingConfig.scaleFactors ?? [0.9, 1.0, 1.1]).map { String($0) }
+        arguments.append(contentsOf: scaleFactorArguments)
+        arguments += ["--detection-threshold", String(trackingConfig.detectionThreshold ?? 0.50)]
+        arguments += ["--low-confidence-threshold", String(trackingConfig.lowConfidenceThreshold ?? 0.36)]
+        arguments += ["--reacquire-threshold", String(trackingConfig.reacquireThreshold ?? 0.56)]
+        arguments += ["--suspect-after-frames", String(trackingConfig.suspectAfterFrames ?? 3)]
+        arguments += ["--recovery-after-frames", String(trackingConfig.recoveryAfterFrames ?? 5)]
+        arguments += ["--max-prediction-frames", String(trackingConfig.maxPredictionFrames ?? 8)]
+        arguments += ["--template-update-rate", String(trackingConfig.templateUpdateRate ?? 0.10)]
+        arguments += ["--stable-update-threshold", String(trackingConfig.stableUpdateThreshold ?? 0.66)]
+        arguments += ["--marker-confidence-bias", String(trackingConfig.markerConfidenceBias ?? 0.58)]
+        arguments += ["--auto-marker-min-ratio", String(trackingConfig.autoMarkerMinRatio ?? 0.12)]
+        arguments += ["--max-interpolation-gap", String(trackingConfig.maxInterpolationGap ?? 3)]
 
         if let endFrame = config.endFrame {
             arguments += ["--end-frame", String(endFrame)]
@@ -137,6 +154,15 @@ struct PythonEngineBridge {
         }
         if config.debugTracking {
             arguments.append("--debug-tracking")
+        }
+        if !(trackingConfig.robustRecovery ?? true) {
+            arguments.append("--disable-robust-recovery")
+        }
+        if !(trackingConfig.bidirectionalRefinement ?? true) {
+            arguments.append("--disable-bidirectional-refinement")
+        }
+        if !(trackingConfig.interpolateShortGaps ?? true) {
+            arguments.append("--disable-interpolate-short-gaps")
         }
         if !config.includeOverlay {
             arguments.append("--skip-overlay")

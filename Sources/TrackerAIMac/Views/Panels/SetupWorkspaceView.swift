@@ -96,9 +96,25 @@ struct SetupWorkspaceView: View {
                         }
                         MacFormRow(label: "Smooth Window") { TextField("7", text: $model.smoothingWindow) }
                         MacFormRow(label: "Polyorder") { TextField("2", text: $model.polyorder) }
+                        MacFormRow(label: "Recovery") {
+                            Toggle("Use robust recovery", isOn: $model.trackingRobustRecovery)
+                                .toggleStyle(.switch)
+                        }
+                        MacFormRow(label: "Refinement") {
+                            Toggle("Run bidirectional refinement", isOn: $model.trackingBidirectionalRefinement)
+                                .toggleStyle(.switch)
+                        }
                         MacFormRow(label: "Debug Export") {
                             Toggle("Include per-frame debug tracking", isOn: $model.debugTracking)
                                 .toggleStyle(.switch)
+                        }
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(model.trackingControlsSummary)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(TrackerTheme.ink)
+                            Text(model.internalTrackingControlsSummary)
+                                .font(.system(size: 12))
+                                .foregroundStyle(TrackerTheme.muted)
                         }
                         Text("Target box")
                             .font(.system(size: 14, weight: .semibold))

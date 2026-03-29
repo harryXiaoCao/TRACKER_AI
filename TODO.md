@@ -103,16 +103,17 @@ The goal of the next migration phase should be to eliminate `PythonEngineBridge.
 
 ### 05. Port the full tracking configuration schema to Swift
 
-- [ ] Add Swift-native equivalents for the Python `TrackingConfig` fields that are not yet surfaced or preserved.
-- [ ] Include thresholds and recovery parameters such as:
+- [x] Add Swift-native equivalents for the Python `TrackingConfig` fields that are not yet surfaced or preserved.
+- [x] Include thresholds and recovery parameters such as:
   - search margins
   - detection thresholds
   - suspect/recovery frame counts
   - interpolation settings
   - template update controls
   - marker confidence bias
-- [ ] Ensure `SessionSnapshot` can round-trip every field needed for reproducible runs.
-- [ ] Decide which controls stay user-facing vs. internal-only.
+- [x] Ensure `SessionSnapshot` can round-trip every field needed for reproducible runs.
+- [x] Decide which controls stay user-facing vs. internal-only.
+  Swift now keeps `profile`, `robust recovery`, `bidirectional refinement`, and debug export user-facing, while preserving deeper tracker thresholds/tuning internally in the session schema and reproduce path.
 
 ### 06. Port single-object tracker runtime from Python/OpenCV to Swift
 

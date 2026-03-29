@@ -317,6 +317,7 @@ struct NativeRunConfiguration {
     var endFrame: Int?
     var smoothingWindow: Int
     var polyorder: Int
+    var trackingConfig: TrackingConfigSnapshot
     var trackingProfile: TrackingProfileOption
     var debugTracking: Bool
     var includeOverlay: Bool
@@ -489,11 +490,73 @@ struct AnalysisConfigSnapshot: Codable {
     var smoothingPolyorder: Int
 }
 
-struct TrackingConfigSnapshot: Codable {
-    var profile: TrackingProfileOption?
-    var robustRecovery: Bool?
-    var bidirectionalRefinement: Bool?
-    var debugTracking: Bool?
+struct TrackingConfigSnapshot: Codable, Equatable {
+    var profile: TrackingProfileOption? = nil
+    var robustRecovery: Bool? = nil
+    var bidirectionalRefinement: Bool? = nil
+    var debugTracking: Bool? = nil
+    var searchMargin: Double? = nil
+    var expandedSearchMargin: Double? = nil
+    var scaleFactors: [Double]? = nil
+    var detectionThreshold: Double? = nil
+    var lowConfidenceThreshold: Double? = nil
+    var reacquireThreshold: Double? = nil
+    var suspectAfterFrames: Int? = nil
+    var recoveryAfterFrames: Int? = nil
+    var maxPredictionFrames: Int? = nil
+    var templateUpdateRate: Double? = nil
+    var stableUpdateThreshold: Double? = nil
+    var markerConfidenceBias: Double? = nil
+    var autoMarkerMinRatio: Double? = nil
+    var interpolateShortGaps: Bool? = nil
+    var maxInterpolationGap: Int? = nil
+
+    static let pythonDefaults = TrackingConfigSnapshot(
+        profile: .auto,
+        robustRecovery: true,
+        bidirectionalRefinement: true,
+        debugTracking: false,
+        searchMargin: 2.4,
+        expandedSearchMargin: 5.5,
+        scaleFactors: [0.9, 1.0, 1.1],
+        detectionThreshold: 0.50,
+        lowConfidenceThreshold: 0.36,
+        reacquireThreshold: 0.56,
+        suspectAfterFrames: 3,
+        recoveryAfterFrames: 5,
+        maxPredictionFrames: 8,
+        templateUpdateRate: 0.10,
+        stableUpdateThreshold: 0.66,
+        markerConfidenceBias: 0.58,
+        autoMarkerMinRatio: 0.12,
+        interpolateShortGaps: true,
+        maxInterpolationGap: 3
+    )
+
+    func resolved() -> TrackingConfigSnapshot {
+        let defaults = Self.pythonDefaults
+        return TrackingConfigSnapshot(
+            profile: profile ?? defaults.profile,
+            robustRecovery: robustRecovery ?? defaults.robustRecovery,
+            bidirectionalRefinement: bidirectionalRefinement ?? defaults.bidirectionalRefinement,
+            debugTracking: debugTracking ?? defaults.debugTracking,
+            searchMargin: searchMargin ?? defaults.searchMargin,
+            expandedSearchMargin: expandedSearchMargin ?? defaults.expandedSearchMargin,
+            scaleFactors: scaleFactors ?? defaults.scaleFactors,
+            detectionThreshold: detectionThreshold ?? defaults.detectionThreshold,
+            lowConfidenceThreshold: lowConfidenceThreshold ?? defaults.lowConfidenceThreshold,
+            reacquireThreshold: reacquireThreshold ?? defaults.reacquireThreshold,
+            suspectAfterFrames: suspectAfterFrames ?? defaults.suspectAfterFrames,
+            recoveryAfterFrames: recoveryAfterFrames ?? defaults.recoveryAfterFrames,
+            maxPredictionFrames: maxPredictionFrames ?? defaults.maxPredictionFrames,
+            templateUpdateRate: templateUpdateRate ?? defaults.templateUpdateRate,
+            stableUpdateThreshold: stableUpdateThreshold ?? defaults.stableUpdateThreshold,
+            markerConfidenceBias: markerConfidenceBias ?? defaults.markerConfidenceBias,
+            autoMarkerMinRatio: autoMarkerMinRatio ?? defaults.autoMarkerMinRatio,
+            interpolateShortGaps: interpolateShortGaps ?? defaults.interpolateShortGaps,
+            maxInterpolationGap: maxInterpolationGap ?? defaults.maxInterpolationGap
+        )
+    }
 }
 
 struct ExperimentMetadataSnapshot: Codable {
@@ -554,6 +617,12 @@ struct ExportPreferencesSnapshot: Codable {
     var includeDebugTracking: Bool?
     var includePlots: Bool?
     var reportTemplate: String?
+}
+
+extension SessionSnapshot {
+    var resolvedTrackingConfig: TrackingConfigSnapshot {
+        (trackingConfig ?? .pythonDefaults).resolved()
+    }
 }
 
 struct SummarySnapshot: Codable {
