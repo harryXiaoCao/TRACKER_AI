@@ -126,11 +126,12 @@ The goal of the next migration phase should be to eliminate `PythonEngineBridge.
 
 ### 07. Port recovery, reacquisition, and tracker state logic
 
-- [ ] Recreate Python tracking states: `tracking`, `suspect`, `lost`, `reacquired`.
-- [ ] Port robust recovery search modes: normal, expanded, and full-frame.
-- [ ] Port failure reason generation and debug ranking metadata.
-- [ ] Preserve reacquisition counts and review recommendations used by QC/reporting.
-- [ ] Add targeted tests using synthetic failure cases and benchmark clips.
+- [x] Recreate Python tracking states: `tracking`, `suspect`, `lost`, `reacquired`.
+- [x] Port robust recovery search modes: normal, expanded, and full-frame.
+- [x] Port failure reason generation and debug ranking metadata.
+- [x] Preserve reacquisition counts and review recommendations used by QC/reporting.
+- [x] Add targeted tests using synthetic failure cases and benchmark clips.
+  Native recovery-state coverage now lives in `Sources/TrackerAIMac/Core/NativeTrackingRuntime.swift` and `tests/TrackerAIMacTests/NativeTrackingRuntimeTests.swift`, including synthetic loss/reacquisition fixtures plus benchmark-backed review/QC assertions for occlusion and re-entry clips.
 
 ### 08. Port interpolation and track-quality derivation as first-class runtime behavior
 

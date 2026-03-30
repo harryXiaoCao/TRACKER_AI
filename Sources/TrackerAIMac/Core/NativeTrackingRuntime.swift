@@ -4,6 +4,7 @@ import Foundation
 enum NativeTrackingRuntimeError: LocalizedError {
     case invalidInitialTemplate
     case invalidFrameRange(start: Int, end: Int)
+    case emptyFrameSequence
 
     var errorDescription: String? {
         switch self {
@@ -11,6 +12,8 @@ enum NativeTrackingRuntimeError: LocalizedError {
             return "The initial bounding box produced an empty native tracking template."
         case .invalidFrameRange(let start, let end):
             return "The selected frame range is invalid: \(start) to \(end)."
+        case .emptyFrameSequence:
+            return "Synthetic tracking requires at least one frame image."
         }
     }
 }
@@ -127,6 +130,38 @@ struct NativeSingleObjectTrackingRunner {
         return mergeBidirectionalTracks(forward: forwardTrack, backward: backwardTrack)
     }
 
+    func runSingleObjectTracking(
+        frameImages: [CGImage],
+        initialBBox: BBoxSnapshot,
+        corrected: Bool = false,
+        config: TrackingConfigSnapshot = .pythonDefaults,
+        fps: Double = 30.0,
+        trackID: String = "primary",
+        trackName: String = "Primary Object",
+        trackKind: String = "primary"
+    ) throws -> NativeTrackResult {
+        guard !frameImages.isEmpty else {
+            throw NativeTrackingRuntimeError.emptyFrameSequence
+        }
+
+        let trackingConfig = config.resolved()
+        let frames = try frameImages.map { try NativeTrackerImage(cgImage: $0) }
+        let endFrame = frames.count - 1
+        return try runTrackingPass(
+            frames: frames,
+            fps: fps,
+            initialBBox: initialBBox,
+            startFrame: 0,
+            endFrame: endFrame,
+            step: 1,
+            corrected: corrected,
+            config: trackingConfig,
+            trackID: trackID,
+            trackName: trackName,
+            trackKind: trackKind
+        )
+    }
+
     private func runTrackingPass(
         video: NativeVideoSource,
         initialBBox: BBoxSnapshot,
@@ -182,6 +217,95 @@ struct NativeSingleObjectTrackingRunner {
                 NativeTrackingObservation(
                     frameIndex: frameIndex,
                     timeSeconds: try video.frameTimestamp(forFrameIndex: frameIndex),
+                    centroidXPixels: update.centroid.x,
+                    centroidYPixels: update.centroid.y,
+                    bbox: update.bbox,
+                    confidence: update.confidence,
+                    lost: update.lost,
+                    corrected: corrected,
+                    state: update.state.rawValue,
+                    failureReason: update.failureReason,
+                    source: update.lost ? "predicted" : "measured",
+                    isInferred: update.lost,
+                    isInterpolated: false,
+                    debug: update.debug,
+                    trackID: trackID,
+                    trackName: trackName,
+                    trackKind: trackKind
+                )
+            )
+        }
+
+        return buildTrackResult(
+            observations: observations,
+            trackerName: "robust_hybrid_tracker",
+            startFrame: min(startFrame, endFrame),
+            endFrame: max(startFrame, endFrame),
+            initialBBox: initialBBox,
+            trackingConfig: tracker.resolvedTrackingConfig,
+            trackID: trackID,
+            trackName: trackName,
+            trackKind: trackKind
+        )
+    }
+
+    private func runTrackingPass(
+        frames: [NativeTrackerImage],
+        fps: Double,
+        initialBBox: BBoxSnapshot,
+        startFrame: Int,
+        endFrame: Int,
+        step: Int,
+        corrected: Bool,
+        config: TrackingConfigSnapshot,
+        trackID: String,
+        trackName: String,
+        trackKind: String
+    ) throws -> NativeTrackResult {
+        guard !frames.isEmpty else {
+            throw NativeTrackingRuntimeError.emptyFrameSequence
+        }
+        let tracker = try NativeRobustHybridTracker(
+            initialFrame: frames[startFrame],
+            initialBBox: initialBBox,
+            config: config
+        )
+
+        var observations: [NativeTrackingObservation] = []
+        for frameIndex in stride(from: startFrame, through: endFrame, by: step) {
+            let frame = frames[frameIndex]
+            if frameIndex == startFrame {
+                let bbox = initialBBox.clipped(frameWidth: frame.width, frameHeight: frame.height)
+                let center = bbox.center
+                observations.append(
+                    NativeTrackingObservation(
+                        frameIndex: frameIndex,
+                        timeSeconds: Double(frameIndex) / max(fps, 1.0),
+                        centroidXPixels: center.x,
+                        centroidYPixels: center.y,
+                        bbox: bbox,
+                        confidence: 1.0,
+                        lost: false,
+                        corrected: corrected,
+                        state: NativeTrackingState.tracking.rawValue,
+                        failureReason: nil,
+                        source: "measured",
+                        isInferred: false,
+                        isInterpolated: false,
+                        debug: ["search_mode": "initial", "profile": tracker.activeProfile.rawValue],
+                        trackID: trackID,
+                        trackName: trackName,
+                        trackKind: trackKind
+                    )
+                )
+                continue
+            }
+
+            let update = tracker.update(frame: frame)
+            observations.append(
+                NativeTrackingObservation(
+                    frameIndex: frameIndex,
+                    timeSeconds: Double(frameIndex) / max(fps, 1.0),
                     centroidXPixels: update.centroid.x,
                     centroidYPixels: update.centroid.y,
                     bbox: update.bbox,
@@ -750,7 +874,8 @@ private final class NativeRobustHybridTracker {
             ranked.append(scoreCandidate(frame: frame, bbox: candidate, predictedBBox: predictedBBox, searchMode: mode))
         }
         ranked.sort { $0.score > $1.score }
-        let best = ranked.first ?? NativeScoredCandidate(
+        let topRanked = Array(ranked.prefix(3))
+        let best = topRanked.first ?? NativeScoredCandidate(
             bbox: predictedBBox,
             score: 0,
             templateScore: 0,
@@ -760,7 +885,7 @@ private final class NativeRobustHybridTracker {
             sizeScore: 0,
             searchMode: mode
         )
-        return (best, ranked)
+        return (best, topRanked)
     }
 
     private func scoreCandidate(
@@ -801,7 +926,7 @@ private final class NativeRobustHybridTracker {
                   referencePatch.height == patch.height else {
                 return 0
             }
-            return clamp(zip(patch.gray, referencePatch.gray).map { abs(Double($0.0 - $0.1)) }.mean())
+            return scaledMotionDifference(current: patch.gray, reference: referencePatch.gray)
         }()
 
         let distance = hypot(bbox.center.x - predictedBBox.center.x, bbox.center.y - predictedBBox.center.y)
@@ -1427,6 +1552,15 @@ private func normalizedCorrelation(lhs: [Float], rhs: [Float]) -> Double {
     let denominator = sqrt(lhsDenominator * rhsDenominator)
     guard denominator > 1e-12 else { return 0 }
     return clamp(numerator / denominator)
+}
+
+private func scaledMotionDifference(current: [Float], reference: [Float]) -> Double {
+    guard current.count == reference.count, !current.isEmpty else { return 0 }
+    let rawDifference = zip(current, reference).map { abs(Double($0.0 - $0.1)) }.mean()
+    // Python computes motion on a contrast-equalized, blurred grayscale patch.
+    // Our native patches use direct luminance, so we damp the raw delta to keep
+    // recovery thresholds aligned with the Python tracker.
+    return clamp(rawDifference * 0.55)
 }
 
 private func rgbToHSV(red: Double, green: Double, blue: Double) -> (Double, Double, Double) {
