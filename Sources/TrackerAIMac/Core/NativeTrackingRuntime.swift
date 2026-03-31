@@ -43,6 +43,12 @@ struct NativeTrackResult {
     }
 }
 
+struct NativeReferenceCorrectedTrackResult {
+    var displayTrack: NativeTrackResult
+    var analysisTrack: NativeTrackResult
+    var referenceTrack: NativeTrackResult
+}
+
 struct NativeTrackingParityTarget: Hashable {
     var clipName: String
     var maxP95CenterErrorPixels: Double
@@ -74,6 +80,87 @@ enum NativeTrackingParityTargets {
 }
 
 struct NativeSingleObjectTrackingRunner {
+    func runReferenceCorrectedTracking(
+        video: NativeVideoSource,
+        initialBBox: BBoxSnapshot,
+        referenceBBox: BBoxSnapshot,
+        startFrame: Int = 0,
+        endFrame: Int? = nil,
+        corrected: Bool = false,
+        config: TrackingConfigSnapshot = .pythonDefaults,
+        trackID: String = "primary",
+        trackName: String = "Primary Object",
+        trackKind: String = "primary"
+    ) throws -> NativeReferenceCorrectedTrackResult {
+        let displayTrack = try runSingleObjectTracking(
+            video: video,
+            initialBBox: initialBBox,
+            startFrame: startFrame,
+            endFrame: endFrame,
+            corrected: corrected,
+            config: config,
+            trackID: trackID,
+            trackName: trackName,
+            trackKind: trackKind
+        )
+        let referenceTrack = try runSingleObjectTracking(
+            video: video,
+            initialBBox: referenceBBox,
+            startFrame: startFrame,
+            endFrame: endFrame,
+            corrected: corrected,
+            config: referenceTrackingConfig(from: config),
+            trackID: "reference",
+            trackName: "Reference Marker",
+            trackKind: "reference"
+        )
+        let analysisTrack = applyReferenceMotionCorrection(primaryTrack: displayTrack, referenceTrack: referenceTrack)
+        return NativeReferenceCorrectedTrackResult(
+            displayTrack: displayTrack,
+            analysisTrack: analysisTrack,
+            referenceTrack: referenceTrack
+        )
+    }
+
+    func runReferenceCorrectedTracking(
+        frameImages: [CGImage],
+        initialBBox: BBoxSnapshot,
+        referenceBBox: BBoxSnapshot,
+        corrected: Bool = false,
+        config: TrackingConfigSnapshot = .pythonDefaults,
+        fps: Double = 30.0,
+        trackID: String = "primary",
+        trackName: String = "Primary Object",
+        trackKind: String = "primary"
+    ) throws -> NativeReferenceCorrectedTrackResult {
+        let displayTrack = try runSingleObjectTracking(
+            frameImages: frameImages,
+            initialBBox: initialBBox,
+            corrected: corrected,
+            config: config,
+            fps: fps,
+            trackID: trackID,
+            trackName: trackName,
+            trackKind: trackKind
+        )
+        let referenceTrack = try runSingleObjectTracking(
+            frameImages: frameImages,
+            initialBBox: referenceBBox,
+            corrected: corrected,
+            config: referenceTrackingConfig(from: config),
+            fps: fps,
+            trackID: "reference",
+            trackName: "Reference Marker",
+            trackKind: "reference"
+        )
+        let analysisTrack = applyReferenceMotionCorrection(primaryTrack: displayTrack, referenceTrack: referenceTrack)
+        return NativeReferenceCorrectedTrackResult(
+            displayTrack: displayTrack,
+            analysisTrack: analysisTrack,
+            referenceTrack: referenceTrack
+        )
+    }
+
     func runSingleObjectTracking(
         video: NativeVideoSource,
         initialBBox: BBoxSnapshot,
@@ -247,6 +334,79 @@ struct NativeSingleObjectTrackingRunner {
             trackName: trackName,
             trackKind: trackKind
         )
+    }
+
+    func applyReferenceMotionCorrection(
+        primaryTrack: NativeTrackResult,
+        referenceTrack: NativeTrackResult
+    ) -> NativeTrackResult {
+        guard let referenceOrigin = referenceTrack.observations.first else {
+            return primaryTrack
+        }
+
+        let referenceByFrame = referenceTrack.observationByFrame()
+        let correctedObservations = primaryTrack.observations.map { observation -> NativeTrackingObservation in
+            guard let referenceObservation = referenceByFrame[observation.frameIndex] else {
+                return observation
+            }
+
+            let dx = referenceObservation.centroidXPixels - referenceOrigin.centroidXPixels
+            let dy = referenceObservation.centroidYPixels - referenceOrigin.centroidYPixels
+            var debug = observation.debug
+            debug["reference_dx"] = roundedReferenceDebugValue(dx)
+            debug["reference_dy"] = roundedReferenceDebugValue(dy)
+            debug["reference_profile"] = referenceTrack.trackingConfig.profile?.rawValue ?? TrackingProfileOption.auto.rawValue
+
+            let resolvedFailureReason: String?
+            if referenceObservation.lost {
+                resolvedFailureReason = observation.failureReason ?? "reference_marker_lost"
+            } else {
+                resolvedFailureReason = observation.failureReason
+            }
+
+            return NativeTrackingObservation(
+                frameIndex: observation.frameIndex,
+                timeSeconds: observation.timeSeconds,
+                centroidXPixels: observation.centroidXPixels - dx,
+                centroidYPixels: observation.centroidYPixels - dy,
+                bbox: observation.bbox,
+                confidence: min(observation.confidence, referenceObservation.confidence),
+                lost: observation.lost || referenceObservation.lost,
+                corrected: observation.corrected,
+                state: referenceObservation.lost ? NativeTrackingState.suspect.rawValue : observation.state,
+                failureReason: resolvedFailureReason,
+                source: observation.source,
+                isInferred: observation.isInferred,
+                isInterpolated: observation.isInterpolated,
+                debug: debug,
+                trackID: observation.trackID,
+                trackName: observation.trackName,
+                trackKind: observation.trackKind
+            )
+        }
+
+        let averageConfidence = correctedObservations.isEmpty ? 0 : correctedObservations.map(\.confidence).mean()
+        return NativeTrackResult(
+            observations: correctedObservations,
+            trackerName: "\(primaryTrack.trackerName)_reference_corrected",
+            averageConfidence: averageConfidence,
+            startFrame: primaryTrack.startFrame,
+            endFrame: primaryTrack.endFrame,
+            initialBBox: primaryTrack.initialBBox,
+            quality: primaryTrack.quality,
+            trackingConfig: primaryTrack.trackingConfig,
+            trackID: primaryTrack.trackID,
+            trackName: primaryTrack.trackName,
+            trackKind: primaryTrack.trackKind
+        )
+    }
+
+    func referenceTrackingConfig(from config: TrackingConfigSnapshot) -> TrackingConfigSnapshot {
+        var resolved = config.resolved()
+        if resolved.profile == .auto {
+            resolved.profile = .marker
+        }
+        return resolved
     }
 
     private func runTrackingPass(
@@ -452,6 +612,10 @@ struct NativeSingleObjectTrackingRunner {
             trackName: forward.trackName,
             trackKind: forward.trackKind
         )
+    }
+
+    private func roundedReferenceDebugValue(_ value: Double) -> String {
+        String((value * 10_000).rounded() / 10_000)
     }
 }
 

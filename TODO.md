@@ -143,10 +143,11 @@ The goal of the next migration phase should be to eliminate `PythonEngineBridge.
 
 ### 09. Port reference-motion correction into the native tracker pipeline
 
-- [ ] Recreate `apply_reference_motion_correction(...)` in the native runtime path.
-- [ ] Track the reference object with its own native config/profile rules.
-- [ ] Preserve corrected observation confidence and failure-reason semantics.
-- [ ] Verify parity for apparatus drift/camera-jitter scenarios.
+- [x] Recreate `apply_reference_motion_correction(...)` in the native runtime path.
+- [x] Track the reference object with its own native config/profile rules.
+- [x] Preserve corrected observation confidence and failure-reason semantics.
+- [x] Verify parity for apparatus drift/camera-jitter scenarios.
+  Native reference correction now lives in `Sources/TrackerAIMac/Core/NativeTrackingRuntime.swift`, with reference-aware runner entry points plus Swift regression coverage for correction semantics and synthetic drift stabilization in `tests/TrackerAIMacTests/NativeTrackingRuntimeTests.swift`.
 
 ### 10. Port multi-object experiment orchestration
 

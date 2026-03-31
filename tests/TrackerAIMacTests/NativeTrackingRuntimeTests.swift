@@ -158,6 +158,122 @@ final class NativeTrackingRuntimeTests: XCTestCase {
         XCTAssertEqual(quality.reviewRecommended, true)
     }
 
+    func testReferenceMotionCorrectionMatchesPythonSemantics() {
+        let runner = NativeSingleObjectTrackingRunner()
+        let primaryTrack = NativeTrackResult(
+            observations: [
+                makeObservation(frameIndex: 0, x: 20, y: 30, confidence: 0.95, lost: false, state: NativeTrackingState.tracking.rawValue),
+                makeObservation(frameIndex: 1, x: 24, y: 31, confidence: 0.80, lost: false, state: NativeTrackingState.tracking.rawValue),
+                makeObservation(frameIndex: 2, x: 29, y: 32, confidence: 0.42, lost: true, state: NativeTrackingState.lost.rawValue)
+            ],
+            trackerName: "robust_hybrid_tracker",
+            averageConfidence: (0.95 + 0.80 + 0.42) / 3.0,
+            startFrame: 0,
+            endFrame: 2,
+            initialBBox: BBoxSnapshot(x: 17, y: 27, width: 6, height: 6),
+            quality: TrackQualitySnapshot(
+                lostSpans: [TrackSpanSnapshot(startFrame: 2, endFrame: 2, reason: "lost_tracking")],
+                suspectSpans: nil,
+                correctedSpans: nil,
+                reacquisitionCount: 0,
+                reviewRecommended: true
+            ),
+            trackingConfig: TrackingConfigSnapshot.pythonDefaults.withBidirectionalRefinement(false),
+            trackID: "primary",
+            trackName: "Primary Object",
+            trackKind: "primary"
+        )
+        let referenceTrack = NativeTrackResult(
+            observations: [
+                makeObservation(frameIndex: 0, x: 80, y: 60, confidence: 1.0, lost: false, state: NativeTrackingState.tracking.rawValue, trackID: "reference", trackName: "Reference Marker", trackKind: "reference"),
+                makeObservation(frameIndex: 1, x: 84, y: 63, confidence: 0.65, lost: false, state: NativeTrackingState.tracking.rawValue, trackID: "reference", trackName: "Reference Marker", trackKind: "reference"),
+                makeObservation(frameIndex: 2, x: 89, y: 66, confidence: 0.30, lost: true, state: NativeTrackingState.lost.rawValue, trackID: "reference", trackName: "Reference Marker", trackKind: "reference")
+            ],
+            trackerName: "robust_hybrid_tracker",
+            averageConfidence: (1.0 + 0.65 + 0.30) / 3.0,
+            startFrame: 0,
+            endFrame: 2,
+            initialBBox: BBoxSnapshot(x: 77, y: 57, width: 6, height: 6),
+            quality: TrackQualitySnapshot(
+                lostSpans: nil,
+                suspectSpans: nil,
+                correctedSpans: nil,
+                reacquisitionCount: 0,
+                reviewRecommended: false
+            ),
+            trackingConfig: TrackingConfigSnapshot(profile: .marker).resolved(),
+            trackID: "reference",
+            trackName: "Reference Marker",
+            trackKind: "reference"
+        )
+
+        let corrected = runner.applyReferenceMotionCorrection(primaryTrack: primaryTrack, referenceTrack: referenceTrack)
+
+        XCTAssertEqual(corrected.trackerName, "robust_hybrid_tracker_reference_corrected")
+        XCTAssertEqual(corrected.quality.lostSpans?.first?.startFrame, 2)
+        XCTAssertEqual(corrected.observations.map(\.centroidXPixels), [20, 20, 20])
+        XCTAssertEqual(corrected.observations.map(\.centroidYPixels), [30, 28, 26])
+        assertApproximatelyEqual(corrected.observations.map(\.confidence), [0.95, 0.65, 0.30], accuracy: 1e-12)
+        XCTAssertEqual(corrected.observations.map(\.lost), [false, false, true])
+        XCTAssertEqual(corrected.observations.map(\.state), [
+            NativeTrackingState.tracking.rawValue,
+            NativeTrackingState.tracking.rawValue,
+            NativeTrackingState.suspect.rawValue,
+        ])
+        XCTAssertEqual(corrected.observations[2].failureReason, "search_exhausted")
+        XCTAssertEqual(corrected.observations[1].debug["reference_dx"], "4.0")
+        XCTAssertEqual(corrected.observations[1].debug["reference_dy"], "3.0")
+        XCTAssertEqual(corrected.observations[1].debug["reference_profile"], TrackingProfileOption.marker.rawValue)
+        XCTAssertEqual(corrected.averageConfidence, (0.95 + 0.65 + 0.30) / 3.0, accuracy: 1e-12)
+    }
+
+    func testNativeReferenceTrackingStabilizesDriftScenario() throws {
+        let frames = [
+            makeSyntheticFrame(objects: [
+                SyntheticObject(rect: CGRect(x: 16, y: 18, width: 12, height: 12), color: (32, 220, 96)),
+                SyntheticObject(rect: CGRect(x: 70, y: 42, width: 10, height: 10), color: (220, 120, 32)),
+            ]),
+            makeSyntheticFrame(objects: [
+                SyntheticObject(rect: CGRect(x: 21, y: 19, width: 12, height: 12), color: (32, 220, 96)),
+                SyntheticObject(rect: CGRect(x: 75, y: 43, width: 10, height: 10), color: (220, 120, 32)),
+            ]),
+            makeSyntheticFrame(objects: [
+                SyntheticObject(rect: CGRect(x: 25, y: 17, width: 12, height: 12), color: (32, 220, 96)),
+                SyntheticObject(rect: CGRect(x: 79, y: 41, width: 10, height: 10), color: (220, 120, 32)),
+            ]),
+            makeSyntheticFrame(objects: [
+                SyntheticObject(rect: CGRect(x: 30, y: 20, width: 12, height: 12), color: (32, 220, 96)),
+                SyntheticObject(rect: CGRect(x: 84, y: 44, width: 10, height: 10), color: (220, 120, 32)),
+            ]),
+        ]
+        var config = TrackingConfigSnapshot.pythonDefaults.resolved()
+        config.profile = .marker
+        config.bidirectionalRefinement = false
+        config.interpolateShortGaps = false
+
+        let result = try NativeSingleObjectTrackingRunner().runReferenceCorrectedTracking(
+            frameImages: frames,
+            initialBBox: BBoxSnapshot(x: 16, y: 18, width: 12, height: 12),
+            referenceBBox: BBoxSnapshot(x: 70, y: 42, width: 10, height: 10),
+            corrected: false,
+            config: config,
+            fps: 30.0
+        )
+
+        let displaySpan = (result.displayTrack.observations.map(\.centroidXPixels).max() ?? 0) - (result.displayTrack.observations.map(\.centroidXPixels).min() ?? 0)
+        let correctedSpan = (result.analysisTrack.observations.map(\.centroidXPixels).max() ?? 0) - (result.analysisTrack.observations.map(\.centroidXPixels).min() ?? 0)
+
+        XCTAssertEqual(result.referenceTrack.trackID, "reference")
+        XCTAssertEqual(result.referenceTrack.trackKind, "reference")
+        XCTAssertEqual(result.referenceTrack.trackingConfig.profile, .marker)
+        XCTAssertFalse(result.referenceTrack.observations.contains(where: \.lost))
+        XCTAssertGreaterThan(displaySpan, 10.0)
+        XCTAssertLessThan(correctedSpan, 4.0)
+        XCTAssertLessThan(correctedSpan, displaySpan * 0.3)
+        XCTAssertEqual(result.analysisTrack.observations.first?.centroidXPixels ?? 0, result.analysisTrack.observations.last?.centroidXPixels ?? 1, accuracy: 3.5)
+        XCTAssertEqual(result.analysisTrack.observations.first?.debug["reference_profile"], TrackingProfileOption.marker.rawValue)
+    }
+
     func testReconstructionRespectsInterpolationGapLimitFromTrackingConfig() {
         var config = TrackingConfigSnapshot.pythonDefaults
         config.maxInterpolationGap = 1
@@ -312,6 +428,19 @@ final class NativeTrackingRuntimeTests: XCTestCase {
         return sorted[lowerIndex] + ((sorted[upperIndex] - sorted[lowerIndex]) * alpha)
     }
 
+    private func assertApproximatelyEqual(
+        _ lhs: [Double],
+        _ rhs: [Double],
+        accuracy: Double,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertEqual(lhs.count, rhs.count, file: file, line: line)
+        for (left, right) in zip(lhs, rhs) {
+            XCTAssertEqual(left, right, accuracy: accuracy, file: file, line: line)
+        }
+    }
+
     private var repositoryRoot: URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -402,21 +531,106 @@ final class NativeTrackingRuntimeTests: XCTestCase {
         )!
     }
 
+    private func makeSyntheticFrame(
+        width: Int = 120,
+        height: Int = 80,
+        objects: [SyntheticObject]
+    ) -> CGImage {
+        var rgba = Array(repeating: UInt8.zero, count: width * height * 4)
+        for object in objects {
+            drawSyntheticObject(
+                into: &rgba,
+                width: width,
+                height: height,
+                objectRect: object.rect,
+                objectColor: object.color
+            )
+        }
+
+        let data = Data(rgba)
+        let provider = CGDataProvider(data: data as CFData)!
+        let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
+        return CGImage(
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bitsPerPixel: 32,
+            bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: bitmapInfo,
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: false,
+            intent: .defaultIntent
+        )!
+    }
+
+    private func drawSyntheticObject(
+        into rgba: inout [UInt8],
+        width: Int,
+        height: Int,
+        objectRect: CGRect,
+        objectColor: (UInt8, UInt8, UInt8)
+    ) {
+        let x0 = max(0, min(width - 1, Int(objectRect.minX.rounded(.down))))
+        let y0 = max(0, min(height - 1, Int(objectRect.minY.rounded(.down))))
+        let x1 = max(x0 + 1, min(width, Int(objectRect.maxX.rounded(.up))))
+        let y1 = max(y0 + 1, min(height, Int(objectRect.maxY.rounded(.up))))
+        for y in y0..<y1 {
+            for x in x0..<x1 {
+                let base = ((y * width) + x) * 4
+                rgba[base] = objectColor.0
+                rgba[base + 1] = objectColor.1
+                rgba[base + 2] = objectColor.2
+                rgba[base + 3] = 255
+            }
+        }
+
+        let inset = max(2, min(x1 - x0, y1 - y0) / 4)
+        if x0 + inset < x1 - inset, y0 + inset < y1 - inset {
+            for y in (y0 + inset)..<(y1 - inset) {
+                for x in (x0 + inset)..<(x1 - inset) {
+                    let base = ((y * width) + x) * 4
+                    rgba[base] = 255
+                    rgba[base + 1] = 255
+                    rgba[base + 2] = 255
+                    rgba[base + 3] = 255
+                }
+            }
+        }
+
+        let centerX = (x0 + x1) / 2
+        let centerY = (y0 + y1) / 2
+        for y in max(y0, centerY - 1)..<min(y1, centerY + 2) {
+            for x in max(x0, centerX - 1)..<min(x1, centerX + 2) {
+                let base = ((y * width) + x) * 4
+                rgba[base] = 16
+                rgba[base + 1] = 16
+                rgba[base + 2] = 16
+                rgba[base + 3] = 255
+            }
+        }
+    }
+
     private func makeObservation(
         frameIndex: Int,
         x: Double,
+        y: Double = 20,
         confidence: Double,
         lost: Bool,
         corrected: Bool = false,
         state: String,
-        debug: [String: String] = [:]
+        debug: [String: String] = [:],
+        trackID: String = "primary",
+        trackName: String = "Primary Object",
+        trackKind: String = "primary"
     ) -> NativeTrackingObservation {
         NativeTrackingObservation(
             frameIndex: frameIndex,
             timeSeconds: Double(frameIndex) / 30.0,
             centroidXPixels: x,
-            centroidYPixels: 20,
-            bbox: BBoxSnapshot(x: x - 3, y: 17, width: 6, height: 6),
+            centroidYPixels: y,
+            bbox: BBoxSnapshot(x: x - 3, y: y - 3, width: 6, height: 6),
             confidence: confidence,
             lost: lost,
             corrected: corrected,
@@ -425,7 +639,10 @@ final class NativeTrackingRuntimeTests: XCTestCase {
             source: lost ? "predicted" : "measured",
             isInferred: lost,
             isInterpolated: false,
-            debug: debug
+            debug: debug,
+            trackID: trackID,
+            trackName: trackName,
+            trackKind: trackKind
         )
     }
 
@@ -513,6 +730,11 @@ private struct NativeBenchmarkMetricsFixture {
     var p95CenterErrorPixels: Double
     var lostFrameRate: Double
     var reacquisitionLatencyFrames: Int
+}
+
+private struct SyntheticObject {
+    var rect: CGRect
+    var color: (UInt8, UInt8, UInt8)
 }
 
 private struct BenchmarkClipFixture {
