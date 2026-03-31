@@ -65,6 +65,7 @@ struct PythonEngineBridge {
     }
 
     func loadBundle(from directory: URL) throws -> AnalysisLoadResult {
+        let pairwiseMetrics = try parsePairwiseMetricsCSV(at: directory.appendingPathComponent("pairwise_metrics.csv"))
         let trackDirectories = try discoverTrackDirectories(in: directory)
         if !trackDirectories.isEmpty {
             var trackBundles: [AnalysisTrackBundle] = []
@@ -86,7 +87,7 @@ struct PythonEngineBridge {
                 reportMarkdown: primaryBundle.reportMarkdown,
                 exportDirectory: directory,
                 trackBundles: trackBundles,
-                pairwiseMetrics: []
+                pairwiseMetrics: pairwiseMetrics
             )
         }
 
@@ -100,7 +101,7 @@ struct PythonEngineBridge {
             reportMarkdown: loaded.bundle.reportMarkdown,
             exportDirectory: directory,
             trackBundles: [loaded.bundle],
-            pairwiseMetrics: []
+            pairwiseMetrics: pairwiseMetrics
         )
     }
 
@@ -351,5 +352,71 @@ struct PythonEngineBridge {
                 failureReason: value(parts, "failure_reason")
             )
         }
+    }
+
+    private func parsePairwiseMetricsCSV(at url: URL) throws -> [PairwiseMetricSnapshot] {
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let lines = text.split(whereSeparator: \.isNewline)
+        guard let headerLine = lines.first else { return [] }
+        let headers = headerLine.split(separator: ",").map(String.init)
+        let headerIndex = Dictionary(uniqueKeysWithValues: headers.enumerated().map { ($1, $0) })
+
+        func value(_ parts: [String], _ key: String) -> String {
+            guard let index = headerIndex[key], index < parts.count else { return "" }
+            return parts[index]
+        }
+
+        var groupedSamples: [String: (primaryTrackID: String, secondaryTrackID: String, samples: [PairwiseMetricSampleSnapshot])] = [:]
+        for line in lines.dropFirst() {
+            let parts = line.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+            guard !parts.allSatisfy(\.isEmpty) else { continue }
+
+            func double(_ key: String) -> Double? {
+                let raw = value(parts, key)
+                return raw.isEmpty ? nil : Double(raw)
+            }
+
+            guard
+                let frameIndex = Int(value(parts, "frame_index")),
+                let timeSeconds = Double(value(parts, "time_s")),
+                let distanceUnits = Double(value(parts, "distance_units")),
+                let relativeSpeedUnitsPerSecond = Double(value(parts, "relative_speed_units_s")),
+                let relativeDXUnits = Double(value(parts, "relative_dx_units")),
+                let relativeDYUnits = Double(value(parts, "relative_dy_units"))
+            else {
+                throw PythonBridgeError.invalidCSV
+            }
+
+            let quoteSet = CharacterSet(charactersIn: "\"")
+            let primaryTrackID = value(parts, "primary_track_id").trimmingCharacters(in: quoteSet)
+            let secondaryTrackID = value(parts, "secondary_track_id").trimmingCharacters(in: quoteSet)
+            let id = "\(primaryTrackID)|\(secondaryTrackID)"
+            let sample = PairwiseMetricSampleSnapshot(
+                frameIndex: frameIndex,
+                timeSeconds: timeSeconds,
+                distanceUnits: distanceUnits,
+                relativeSpeedUnitsPerSecond: relativeSpeedUnitsPerSecond,
+                relativeDXUnits: relativeDXUnits,
+                relativeDYUnits: relativeDYUnits,
+                centerOfMassXUnits: double("center_of_mass_x_units"),
+                centerOfMassYUnits: double("center_of_mass_y_units")
+            )
+
+            if groupedSamples[id] == nil {
+                groupedSamples[id] = (primaryTrackID, secondaryTrackID, [])
+            }
+            groupedSamples[id]?.samples.append(sample)
+        }
+
+        return groupedSamples.values
+            .map {
+                PairwiseMetricSnapshot(
+                    primaryTrackID: $0.primaryTrackID,
+                    secondaryTrackID: $0.secondaryTrackID,
+                    samples: $0.samples.sorted { $0.frameIndex < $1.frameIndex }
+                )
+            }
+            .sorted { $0.id < $1.id }
     }
 }

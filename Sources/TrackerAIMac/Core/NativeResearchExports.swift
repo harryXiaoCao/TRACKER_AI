@@ -393,7 +393,9 @@ struct NativeTrackingPipeline {
                         distanceUnits: sqrt((relativeDXUnits * relativeDXUnits) + (relativeDYUnits * relativeDYUnits)),
                         relativeSpeedUnitsPerSecond: sqrt((relativeVX * relativeVX) + (relativeVY * relativeVY)),
                         relativeDXUnits: relativeDXUnits,
-                        relativeDYUnits: relativeDYUnits
+                        relativeDYUnits: relativeDYUnits,
+                        centerOfMassXUnits: (primaryRow.xUnits + secondaryRow.xUnits) / 2.0,
+                        centerOfMassYUnits: (primaryRow.yUnits + secondaryRow.yUnits) / 2.0
                     )
                 }
 
@@ -434,6 +436,12 @@ struct NativeTrackingPipeline {
 }
 
 struct NativeResearchBundleExporter {
+    func exportPairwiseMetrics(_ metrics: [PairwiseMetricSnapshot], to directory: URL) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let pairwiseURL = directory.appendingPathComponent("pairwise_metrics.csv")
+        try buildPairwiseMetricsCSV(metrics).write(to: pairwiseURL, atomically: true, encoding: .utf8)
+    }
+
     func export(_ payload: NativeResearchBundlePayload) throws -> [String: URL] {
         let directory = payload.outputDirectory
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -867,6 +875,7 @@ struct NativeResearchBundleExporter {
         let header = [
             "primary_track_id", "secondary_track_id", "frame_index", "time_s",
             "distance_units", "relative_speed_units_s", "relative_dx_units", "relative_dy_units",
+            "center_of_mass_x_units", "center_of_mass_y_units",
         ]
         var lines = [header.joined(separator: ",")]
         for metric in metrics.sorted(by: { $0.id < $1.id }) {
@@ -880,6 +889,8 @@ struct NativeResearchBundleExporter {
                     format(sample.relativeSpeedUnitsPerSecond),
                     format(sample.relativeDXUnits),
                     format(sample.relativeDYUnits),
+                    formatOptional(sample.centerOfMassXUnits),
+                    formatOptional(sample.centerOfMassYUnits),
                 ].joined(separator: ",")
             })
         }
@@ -931,7 +942,9 @@ struct NativeResearchReporter {
                         distanceUnits: sqrt((relativeDXUnits * relativeDXUnits) + (relativeDYUnits * relativeDYUnits)),
                         relativeSpeedUnitsPerSecond: sqrt((relativeVX * relativeVX) + (relativeVY * relativeVY)),
                         relativeDXUnits: relativeDXUnits,
-                        relativeDYUnits: relativeDYUnits
+                        relativeDYUnits: relativeDYUnits,
+                        centerOfMassXUnits: (primaryRow.xUnits + secondaryRow.xUnits) / 2.0,
+                        centerOfMassYUnits: (primaryRow.yUnits + secondaryRow.yUnits) / 2.0
                     )
                 }
                 guard !samples.isEmpty else { continue }

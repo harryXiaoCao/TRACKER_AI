@@ -352,6 +352,8 @@ struct PairwiseMetricSampleSnapshot: Identifiable, Hashable {
     var relativeSpeedUnitsPerSecond: Double
     var relativeDXUnits: Double
     var relativeDYUnits: Double
+    var centerOfMassXUnits: Double? = nil
+    var centerOfMassYUnits: Double? = nil
 
     var id: Int { frameIndex }
 }
@@ -565,6 +567,14 @@ struct ExperimentMetadataSnapshot: Codable {
     var operatorName: String?
     var notes: String?
     var tags: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case experimentLabel = "experiment_label"
+        case trialID = "trial_id"
+        case operatorName = "operator_name"
+        case notes
+        case tags
+    }
 }
 
 struct CorrectionSnapshot: Codable {
@@ -589,6 +599,69 @@ struct EventMarkerSnapshot: Codable {
     var axis: String?
     var note: String?
     var origin: String?
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case frameIndex = "frame_index"
+        case timeS = "time_s"
+        case value
+        case unitLabel = "unit_label"
+        case axis
+        case note
+        case origin
+    }
+
+    enum LegacyCodingKeys: String, CodingKey {
+        case name
+        case frameIndex
+        case timeS
+        case value
+        case unitLabel
+        case axis
+        case note
+        case origin
+    }
+
+    init(
+        name: String,
+        frameIndex: Int,
+        timeS: Double,
+        value: Double,
+        unitLabel: String,
+        axis: String?,
+        note: String?,
+        origin: String?
+    ) {
+        self.name = name
+        self.frameIndex = frameIndex
+        self.timeS = timeS
+        self.value = value
+        self.unitLabel = unitLabel
+        self.axis = axis
+        self.note = note
+        self.origin = origin
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+            ?? legacy.decode(String.self, forKey: .name)
+        frameIndex = try container.decodeIfPresent(Int.self, forKey: .frameIndex)
+            ?? legacy.decode(Int.self, forKey: .frameIndex)
+        timeS = try container.decodeIfPresent(Double.self, forKey: .timeS)
+            ?? legacy.decode(Double.self, forKey: .timeS)
+        value = try container.decodeIfPresent(Double.self, forKey: .value)
+            ?? legacy.decode(Double.self, forKey: .value)
+        unitLabel = try container.decodeIfPresent(String.self, forKey: .unitLabel)
+            ?? legacy.decode(String.self, forKey: .unitLabel)
+        axis = try container.decodeIfPresent(String.self, forKey: .axis)
+            ?? legacy.decodeIfPresent(String.self, forKey: .axis)
+        note = try container.decodeIfPresent(String.self, forKey: .note)
+            ?? legacy.decodeIfPresent(String.self, forKey: .note)
+        origin = try container.decodeIfPresent(String.self, forKey: .origin)
+            ?? legacy.decodeIfPresent(String.self, forKey: .origin)
+    }
 }
 
 struct AdditionalObjectSnapshot: Codable {
@@ -596,6 +669,52 @@ struct AdditionalObjectSnapshot: Codable {
     var name: String
     var kind: String?
     var bbox: BBoxSnapshot
+
+    enum CodingKeys: String, CodingKey {
+        case trackID = "track_id"
+        case name
+        case kind
+        case bbox
+    }
+
+    enum LegacyCodingKeys: String, CodingKey {
+        case trackID
+        case name
+        case kind
+        case bbox
+    }
+
+    enum AlternateCodingKeys: String, CodingKey {
+        case trackId
+        case name
+        case kind
+        case bbox
+    }
+
+    init(trackID: String, name: String, kind: String?, bbox: BBoxSnapshot) {
+        self.trackID = trackID
+        self.name = name
+        self.kind = kind
+        self.bbox = bbox
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
+        let alternate = try decoder.container(keyedBy: AlternateCodingKeys.self)
+        trackID = try container.decodeIfPresent(String.self, forKey: .trackID)
+            ?? legacy.decodeIfPresent(String.self, forKey: .trackID)
+            ?? alternate.decode(String.self, forKey: .trackId)
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+            ?? legacy.decodeIfPresent(String.self, forKey: .name)
+            ?? alternate.decode(String.self, forKey: .name)
+        kind = try container.decodeIfPresent(String.self, forKey: .kind)
+            ?? legacy.decodeIfPresent(String.self, forKey: .kind)
+            ?? alternate.decodeIfPresent(String.self, forKey: .kind)
+        bbox = try container.decodeIfPresent(BBoxSnapshot.self, forKey: .bbox)
+            ?? legacy.decodeIfPresent(BBoxSnapshot.self, forKey: .bbox)
+            ?? alternate.decode(BBoxSnapshot.self, forKey: .bbox)
+    }
 }
 
 struct TrackSpanSnapshot: Codable {

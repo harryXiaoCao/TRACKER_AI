@@ -1685,11 +1685,15 @@ final class AppModel {
         }
         let nativeTracks = processedBundles.compactMap { nativeTrackingPipeline.reconstructTrack(bundle: $0, session: session) }
         let analysesByTrackID = Dictionary(uniqueKeysWithValues: processedBundles.map { ($0.trackID, $0.analysisRows) })
-        let nativePairwiseMetrics = nativeTrackingPipeline.rebuildPairwiseMetrics(
-            tracks: nativeTracks,
-            analysesByTrackID: analysesByTrackID
-        )
-        let resolvedPairwiseMetrics = nativePairwiseMetrics.isEmpty ? normalized.pairwiseMetrics : nativePairwiseMetrics
+        let resolvedPairwiseMetrics: [PairwiseMetricSnapshot]
+        if normalized.pairwiseMetrics.isEmpty {
+            resolvedPairwiseMetrics = nativeTrackingPipeline.rebuildPairwiseMetrics(
+                tracks: nativeTracks,
+                analysesByTrackID: analysesByTrackID
+            )
+        } else {
+            resolvedPairwiseMetrics = normalized.pairwiseMetrics
+        }
 
         normalized.trackBundles = processedBundles.map { bundle in
             rebuiltTrackBundle(
@@ -2297,6 +2301,7 @@ final class AppModel {
                 reportMarkdown = (try? String(contentsOf: reportURL, encoding: .utf8)) ?? reportMarkdown
             }
         }
+        try nativeExporter.exportPairwiseMetrics(result.pairwiseMetrics, to: result.exportDirectory)
     }
 
     private func eventMarkers(from session: SessionSnapshot) -> [EventMarkerRecord] {

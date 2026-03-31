@@ -371,6 +371,8 @@ final class NativeTrackingRuntimeTests: XCTestCase {
         XCTAssertEqual(pairwise.samples.map(\.frameIndex), [0, 1, 2, 3])
         XCTAssertTrue(pairwise.samples.allSatisfy { $0.relativeDXUnits > 0 })
         XCTAssertTrue(pairwise.samples.allSatisfy { $0.relativeSpeedUnitsPerSecond >= 0 })
+        XCTAssertTrue(pairwise.samples.allSatisfy { $0.centerOfMassXUnits != nil })
+        XCTAssertTrue(pairwise.samples.allSatisfy { $0.centerOfMassYUnits != nil })
         XCTAssertLessThan(pairwise.samples.first?.distanceUnits ?? .greatestFiniteMagnitude, pairwise.samples.last?.distanceUnits ?? 0)
         XCTAssertLessThan(pairwise.samples.first?.relativeDXUnits ?? .greatestFiniteMagnitude, pairwise.samples.last?.relativeDXUnits ?? 0)
 
@@ -381,6 +383,95 @@ final class NativeTrackingRuntimeTests: XCTestCase {
         XCTAssertEqual(loadResult.trackBundles.map(\.trackID), ["primary", "secondary_cart"])
         XCTAssertEqual(loadResult.trackBundles[0].trackKind, "primary")
         XCTAssertEqual(loadResult.trackBundles[1].trackKind, "secondary")
+    }
+
+    func testNativePairwiseMetricsPersistAsAuthoritativeBundleArtifact() throws {
+        let frames = [
+            makeSyntheticFrame(objects: [
+                SyntheticObject(rect: CGRect(x: 10, y: 18, width: 12, height: 12), color: (32, 220, 96)),
+                SyntheticObject(rect: CGRect(x: 18, y: 18, width: 12, height: 12), color: (64, 160, 240)),
+            ]),
+            makeSyntheticFrame(objects: [
+                SyntheticObject(rect: CGRect(x: 12, y: 18, width: 12, height: 12), color: (32, 220, 96)),
+                SyntheticObject(rect: CGRect(x: 16, y: 18, width: 12, height: 12), color: (64, 160, 240)),
+            ]),
+            makeSyntheticFrame(objects: [
+                SyntheticObject(rect: CGRect(x: 14, y: 18, width: 12, height: 12), color: (32, 220, 96)),
+                SyntheticObject(rect: CGRect(x: 14, y: 18, width: 12, height: 12), color: (64, 160, 240)),
+            ]),
+            makeSyntheticFrame(objects: [
+                SyntheticObject(rect: CGRect(x: 16, y: 18, width: 12, height: 12), color: (32, 220, 96)),
+                SyntheticObject(rect: CGRect(x: 12, y: 18, width: 12, height: 12), color: (64, 160, 240)),
+            ]),
+        ]
+        var config = TrackingConfigSnapshot.pythonDefaults.resolved()
+        config.profile = .marker
+        config.bidirectionalRefinement = false
+        config.interpolateShortGaps = false
+
+        var session = makeSessionSnapshot(trackingConfig: config)
+        session.additionalObjects = [
+            AdditionalObjectSnapshot(
+                trackID: "secondary_cart",
+                name: "Secondary Cart",
+                kind: "secondary",
+                bbox: BBoxSnapshot(x: 18, y: 18, width: 12, height: 12)
+            )
+        ]
+
+        let result = try NativeMultiObjectTrackingRunner().run(
+            frameImages: frames,
+            session: session,
+            fps: 30.0
+        )
+        let loadResult = result.asLoadResult(
+            session: session,
+            outputDirectory: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        )
+
+        let exporter = NativeResearchBundleExporter()
+        for bundle in loadResult.trackBundles {
+            _ = try exporter.export(
+                NativeResearchBundlePayload(
+                    session: session,
+                    trackID: bundle.trackID,
+                    trackName: bundle.trackName,
+                    analysisRows: bundle.analysisRows,
+                    pairwiseMetrics: loadResult.pairwiseMetrics,
+                    eventMarkers: [],
+                    outputDirectory: bundle.exportDirectory,
+                    reportTemplate: "research",
+                    trackingProfile: .marker,
+                    includeOverlay: false,
+                    includePlots: false,
+                    debugTracking: false,
+                    summary: bundle.summary,
+                    quality: bundle.quality,
+                    modules: bundle.modules
+                )
+            )
+        }
+        try exporter.exportPairwiseMetrics(loadResult.pairwiseMetrics, to: loadResult.exportDirectory)
+
+        let expected = try XCTUnwrap(loadResult.pairwiseMetrics.first)
+        let reloaded = try PythonEngineBridge().loadBundle(from: loadResult.exportDirectory)
+        let pairwise = try XCTUnwrap(reloaded.pairwiseMetrics.first)
+        XCTAssertEqual(pairwise.primaryTrackID, expected.primaryTrackID)
+        XCTAssertEqual(pairwise.secondaryTrackID, expected.secondaryTrackID)
+        XCTAssertEqual(pairwise.collisionFrame, expected.collisionFrame)
+        XCTAssertEqual(pairwise.minimumSeparation, expected.minimumSeparation, accuracy: 0.0001)
+        XCTAssertEqual(pairwise.peakRelativeSpeed, expected.peakRelativeSpeed, accuracy: 0.0001)
+        XCTAssertEqual(pairwise.samples.map(\.frameIndex), expected.samples.map(\.frameIndex))
+        XCTAssertEqual(
+            try XCTUnwrap(pairwise.samples[2].centerOfMassXUnits),
+            try XCTUnwrap(expected.samples[2].centerOfMassXUnits),
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(pairwise.samples[2].centerOfMassYUnits),
+            try XCTUnwrap(expected.samples[2].centerOfMassYUnits),
+            accuracy: 0.0001
+        )
     }
 
     func testNativeTrackerMeetsBenchmarkReleaseGateTargets() async throws {

@@ -160,10 +160,11 @@ The goal of the next migration phase should be to eliminate `PythonEngineBridge.
 
 ### 11. Port native pairwise metrics from reconstruction helper to authoritative analysis output
 
-- [ ] Make pairwise metrics an official native analysis artifact, not just a post-load reconstruction.
-- [ ] Preserve collision frame, minimum separation, relative speed, and center-of-mass metrics.
-- [ ] Match CSV export schema expected by current results screens and reports.
-- [ ] Add tests using sessions with companion objects and pairwise expectations.
+- [x] Make pairwise metrics an official native analysis artifact, not just a post-load reconstruction.
+- [x] Preserve collision frame, minimum separation, relative speed, and center-of-mass metrics.
+- [x] Match CSV export schema expected by current results screens and reports.
+- [x] Add tests using sessions with companion objects and pairwise expectations.
+  Native pairwise metrics now persist as the authoritative `pairwise_metrics.csv` experiment artifact at bundle root, reload through `PythonEngineBridge.loadBundle(...)` instead of being dropped and rebuilt later, carry center-of-mass coordinates alongside collision/min-separation/relative-speed semantics, and are covered by focused Swift regressions for both live multi-object runs and export/reload persistence.
 
 ### 12. Port kinematic analysis as a primary native pipeline stage
 
