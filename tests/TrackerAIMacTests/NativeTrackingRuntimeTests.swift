@@ -302,6 +302,87 @@ final class NativeTrackingRuntimeTests: XCTestCase {
         XCTAssertEqual(reconstruction?.quality.lostSpans?.map(\.endFrame), [2])
     }
 
+    func testNativeMultiObjectExperimentCoordinatesReferenceCorrectionAndPairwiseMetrics() throws {
+        let frames = [
+            makeSyntheticFrame(objects: [
+                SyntheticObject(rect: CGRect(x: 20, y: 18, width: 12, height: 12), color: (32, 220, 96)),
+                SyntheticObject(rect: CGRect(x: 50, y: 18, width: 12, height: 12), color: (64, 160, 240)),
+                SyntheticObject(rect: CGRect(x: 80, y: 42, width: 10, height: 10), color: (220, 120, 32)),
+            ]),
+            makeSyntheticFrame(objects: [
+                SyntheticObject(rect: CGRect(x: 24, y: 18, width: 12, height: 12), color: (32, 220, 96)),
+                SyntheticObject(rect: CGRect(x: 56, y: 18, width: 12, height: 12), color: (64, 160, 240)),
+                SyntheticObject(rect: CGRect(x: 84, y: 42, width: 10, height: 10), color: (220, 120, 32)),
+            ]),
+            makeSyntheticFrame(objects: [
+                SyntheticObject(rect: CGRect(x: 28, y: 18, width: 12, height: 12), color: (32, 220, 96)),
+                SyntheticObject(rect: CGRect(x: 62, y: 18, width: 12, height: 12), color: (64, 160, 240)),
+                SyntheticObject(rect: CGRect(x: 88, y: 42, width: 10, height: 10), color: (220, 120, 32)),
+            ]),
+            makeSyntheticFrame(objects: [
+                SyntheticObject(rect: CGRect(x: 32, y: 18, width: 12, height: 12), color: (32, 220, 96)),
+                SyntheticObject(rect: CGRect(x: 68, y: 18, width: 12, height: 12), color: (64, 160, 240)),
+                SyntheticObject(rect: CGRect(x: 92, y: 42, width: 10, height: 10), color: (220, 120, 32)),
+            ]),
+        ]
+        var config = TrackingConfigSnapshot.pythonDefaults.resolved()
+        config.profile = .marker
+        config.bidirectionalRefinement = false
+        config.interpolateShortGaps = false
+
+        var session = makeSessionSnapshot(trackingConfig: config)
+        session.referenceBbox = BBoxSnapshot(x: 80, y: 42, width: 10, height: 10)
+        session.additionalObjects = [
+            AdditionalObjectSnapshot(
+                trackID: "secondary_cart",
+                name: "Secondary Cart",
+                kind: "secondary",
+                bbox: BBoxSnapshot(x: 50, y: 18, width: 12, height: 12)
+            )
+        ]
+
+        let result = try NativeMultiObjectTrackingRunner().run(
+            frameImages: frames,
+            session: session,
+            fps: 30.0
+        )
+
+        XCTAssertEqual(result.primaryTrackID, "primary")
+        XCTAssertEqual(result.displayTracks.keys.sorted(), ["primary", "secondary_cart"])
+        XCTAssertEqual(result.analysisTracks.keys.sorted(), ["primary", "secondary_cart"])
+        XCTAssertEqual(result.referenceTrack?.trackID, "reference")
+        XCTAssertEqual(result.referenceTrack?.trackKind, "reference")
+        XCTAssertEqual(result.displayTracks["primary"]?.trackName, "Primary Object")
+        XCTAssertEqual(result.analysisTracks["secondary_cart"]?.trackName, "Secondary Cart")
+        XCTAssertEqual(result.analysisTracks["secondary_cart"]?.trackKind, "secondary")
+
+        let primaryAnalysisTrack = try XCTUnwrap(result.analysisTracks["primary"])
+        XCTAssertEqual(primaryAnalysisTrack.observations.count, 4)
+        XCTAssertTrue(
+            primaryAnalysisTrack.observations.allSatisfy {
+                $0.debug["reference_profile"] == TrackingProfileOption.marker.rawValue
+            }
+        )
+
+        let pairwise = try XCTUnwrap(result.pairwiseMetrics.first)
+        XCTAssertEqual(pairwise.primaryTrackID, "primary")
+        XCTAssertEqual(pairwise.secondaryTrackID, "secondary_cart")
+        XCTAssertEqual(pairwise.samples.count, 4)
+        XCTAssertEqual(pairwise.samples.map(\.frameIndex), [0, 1, 2, 3])
+        XCTAssertTrue(pairwise.samples.allSatisfy { $0.relativeDXUnits > 0 })
+        XCTAssertTrue(pairwise.samples.allSatisfy { $0.relativeSpeedUnitsPerSecond >= 0 })
+        XCTAssertLessThan(pairwise.samples.first?.distanceUnits ?? .greatestFiniteMagnitude, pairwise.samples.last?.distanceUnits ?? 0)
+        XCTAssertLessThan(pairwise.samples.first?.relativeDXUnits ?? .greatestFiniteMagnitude, pairwise.samples.last?.relativeDXUnits ?? 0)
+
+        let loadResult = result.asLoadResult(
+            session: session,
+            outputDirectory: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("native-multi-test")
+        )
+        XCTAssertEqual(loadResult.trackBundles.map(\.trackID), ["primary", "secondary_cart"])
+        XCTAssertEqual(loadResult.trackBundles[0].trackKind, "primary")
+        XCTAssertEqual(loadResult.trackBundles[1].trackKind, "secondary")
+    }
+
     func testNativeTrackerMeetsBenchmarkReleaseGateTargets() async throws {
         let clips = Dictionary(uniqueKeysWithValues: try loadBenchmarkClips().map { ($0.name, $0) })
         let runner = NativeSingleObjectTrackingRunner()

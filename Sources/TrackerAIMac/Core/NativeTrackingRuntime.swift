@@ -49,6 +49,273 @@ struct NativeReferenceCorrectedTrackResult {
     var referenceTrack: NativeTrackResult
 }
 
+struct NativeTrackedObjectSpecification {
+    var trackID: String
+    var trackName: String
+    var trackKind: String
+    var initialBBox: BBoxSnapshot
+}
+
+struct NativeMultiObjectExperimentResult {
+    var primaryTrackID: String
+    var displayTracks: [String: NativeTrackResult]
+    var analysisTracks: [String: NativeTrackResult]
+    var analysesByTrackID: [String: [AnalysisRow]]
+    var pairwiseMetrics: [PairwiseMetricSnapshot]
+    var referenceTrack: NativeTrackResult?
+
+    func asLoadResult(session: SessionSnapshot, outputDirectory: URL) -> AnalysisLoadResult {
+        let orderedBundles = analysisTracks.values
+            .sorted { lhs, rhs in
+                if lhs.trackID == primaryTrackID { return true }
+                if rhs.trackID == primaryTrackID { return false }
+                return lhs.trackID < rhs.trackID
+            }
+            .compactMap { track -> AnalysisTrackBundle? in
+                guard let rows = analysesByTrackID[track.trackID] else { return nil }
+                let bundleDirectory: URL
+                if analysisTracks.count > 1 {
+                    bundleDirectory = outputDirectory.appendingPathComponent(track.trackID, isDirectory: true)
+                } else {
+                    bundleDirectory = outputDirectory
+                }
+                return AnalysisTrackBundle(
+                    trackID: track.trackID,
+                    trackName: track.trackName,
+                    trackKind: track.trackKind,
+                    summary: nil,
+                    quality: nil,
+                    modules: [],
+                    analysisRows: rows,
+                    reportMarkdown: "",
+                    exportDirectory: bundleDirectory
+                )
+            }
+
+        let primaryBundle = orderedBundles.first(where: { $0.trackID == primaryTrackID }) ?? orderedBundles.first
+        return AnalysisLoadResult(
+            summary: nil,
+            quality: nil,
+            modules: [],
+            analysisRows: primaryBundle?.analysisRows ?? [],
+            session: session,
+            reportMarkdown: "",
+            exportDirectory: outputDirectory,
+            trackBundles: orderedBundles,
+            pairwiseMetrics: pairwiseMetrics
+        )
+    }
+}
+
+struct NativeMultiObjectTrackingRunner {
+    private let trackingRunner = NativeSingleObjectTrackingRunner()
+    private let scientificProcessor = NativeScientificProcessor()
+    private let trackingPipeline = NativeTrackingPipeline()
+
+    func run(
+        video: NativeVideoSource,
+        session: SessionSnapshot,
+        primaryTrackID: String = "primary"
+    ) throws -> NativeMultiObjectExperimentResult {
+        let trackedObjects = trackedObjects(from: session, primaryTrackID: primaryTrackID)
+        let trackingConfig = session.resolvedTrackingConfig
+        let startFrame = max(session.selectedStartFrame ?? 0, 0)
+        let endFrame = session.selectedEndFrame
+        let referenceTrack = try session.referenceBbox.map { referenceBBox in
+            try trackingRunner.runSingleObjectTracking(
+                video: video,
+                initialBBox: referenceBBox,
+                startFrame: startFrame,
+                endFrame: endFrame,
+                corrected: false,
+                config: trackingRunner.referenceTrackingConfig(from: trackingConfig),
+                trackID: "reference",
+                trackName: "Reference Marker",
+                trackKind: "reference"
+            )
+        }
+
+        return try coordinateRun(
+            trackedObjects: trackedObjects,
+            session: session,
+            referenceTrack: referenceTrack,
+            primaryTrackID: primaryTrackID
+        ) { object in
+            try trackingRunner.runSingleObjectTracking(
+                video: video,
+                initialBBox: object.initialBBox,
+                startFrame: startFrame,
+                endFrame: endFrame,
+                corrected: false,
+                config: trackingConfig,
+                trackID: object.trackID,
+                trackName: object.trackName,
+                trackKind: object.trackKind
+            )
+        }
+    }
+
+    func run(
+        frameImages: [CGImage],
+        session: SessionSnapshot,
+        primaryTrackID: String = "primary",
+        fps: Double = 30.0
+    ) throws -> NativeMultiObjectExperimentResult {
+        let trackedObjects = trackedObjects(from: session, primaryTrackID: primaryTrackID)
+        let trackingConfig = session.resolvedTrackingConfig
+        let referenceTrack = try session.referenceBbox.map { referenceBBox in
+            try trackingRunner.runSingleObjectTracking(
+                frameImages: frameImages,
+                initialBBox: referenceBBox,
+                corrected: false,
+                config: trackingRunner.referenceTrackingConfig(from: trackingConfig),
+                fps: fps,
+                trackID: "reference",
+                trackName: "Reference Marker",
+                trackKind: "reference"
+            )
+        }
+
+        return try coordinateRun(
+            trackedObjects: trackedObjects,
+            session: session,
+            referenceTrack: referenceTrack,
+            primaryTrackID: primaryTrackID
+        ) { object in
+            try trackingRunner.runSingleObjectTracking(
+                frameImages: frameImages,
+                initialBBox: object.initialBBox,
+                corrected: false,
+                config: trackingConfig,
+                fps: fps,
+                trackID: object.trackID,
+                trackName: object.trackName,
+                trackKind: object.trackKind
+            )
+        }
+    }
+
+    private func coordinateRun(
+        trackedObjects: [NativeTrackedObjectSpecification],
+        session: SessionSnapshot,
+        referenceTrack: NativeTrackResult?,
+        primaryTrackID: String,
+        trackRunner: (NativeTrackedObjectSpecification) throws -> NativeTrackResult
+    ) throws -> NativeMultiObjectExperimentResult {
+        let calibrationProfile = try session.calibration.makeCalibrationProfile()
+        var displayTracks: [String: NativeTrackResult] = [:]
+        var analysisTracks: [String: NativeTrackResult] = [:]
+        var analysesByTrackID: [String: [AnalysisRow]] = [:]
+
+        for object in trackedObjects {
+            let displayTrack = try trackRunner(object)
+            let analysisTrack: NativeTrackResult
+            if let referenceTrack {
+                analysisTrack = trackingRunner.applyReferenceMotionCorrection(
+                    primaryTrack: displayTrack,
+                    referenceTrack: referenceTrack
+                )
+            } else {
+                analysisTrack = displayTrack
+            }
+
+            displayTracks[object.trackID] = displayTrack
+            analysisTracks[object.trackID] = analysisTrack
+            analysesByTrackID[object.trackID] = scientificProcessor.process(
+                rows: rawAnalysisRows(for: analysisTrack, calibrationProfile: calibrationProfile),
+                session: session
+            )
+        }
+
+        let reconstructions = analysisTracks.values.map { track in
+            NativeTrackReconstruction(
+                trackID: track.trackID,
+                trackName: track.trackName,
+                trackKind: track.trackKind,
+                observations: track.observations,
+                quality: track.quality,
+                averageConfidence: track.averageConfidence
+            )
+        }
+        let pairwiseMetrics = trackingPipeline.rebuildPairwiseMetrics(
+            tracks: reconstructions,
+            analysesByTrackID: analysesByTrackID
+        )
+
+        return NativeMultiObjectExperimentResult(
+            primaryTrackID: primaryTrackID,
+            displayTracks: displayTracks,
+            analysisTracks: analysisTracks,
+            analysesByTrackID: analysesByTrackID,
+            pairwiseMetrics: pairwiseMetrics,
+            referenceTrack: referenceTrack
+        )
+    }
+
+    private func trackedObjects(
+        from session: SessionSnapshot,
+        primaryTrackID: String
+    ) -> [NativeTrackedObjectSpecification] {
+        var objects = [
+            NativeTrackedObjectSpecification(
+                trackID: primaryTrackID,
+                trackName: "Primary Object",
+                trackKind: "primary",
+                initialBBox: session.initialBbox
+            )
+        ]
+        objects.append(
+            contentsOf: (session.additionalObjects ?? []).map {
+                NativeTrackedObjectSpecification(
+                    trackID: $0.trackID,
+                    trackName: $0.name,
+                    trackKind: $0.kind ?? "secondary",
+                    initialBBox: $0.bbox
+                )
+            }
+        )
+        return objects
+    }
+
+    private func rawAnalysisRows(
+        for track: NativeTrackResult,
+        calibrationProfile: CalibrationProfile
+    ) -> [AnalysisRow] {
+        track.observations.map { observation in
+            let transformed = calibrationProfile.transformPoint(
+                xPx: observation.centroidXPixels,
+                yPx: observation.centroidYPixels
+            )
+            return AnalysisRow(
+                frameIndex: observation.frameIndex,
+                timeSeconds: observation.timeSeconds,
+                xUnits: transformed.0,
+                yUnits: transformed.1,
+                speed: 0,
+                accelerationMagnitude: 0,
+                trackerConfidence: observation.confidence,
+                scientificConfidence: observation.confidence,
+                xPixels: observation.centroidXPixels,
+                yPixels: observation.centroidYPixels,
+                rawXUnits: transformed.0,
+                rawYUnits: transformed.1,
+                xVelocity: nil,
+                yVelocity: nil,
+                xAcceleration: nil,
+                yAcceleration: nil,
+                angleDegrees: nil,
+                positionUncertainty: nil,
+                velocityUncertainty: nil,
+                accelerationUncertainty: nil,
+                lost: observation.lost,
+                corrected: observation.corrected,
+                state: observation.state,
+                failureReason: observation.failureReason ?? ""
+            )
+        }
+    }
+}
+
 struct NativeTrackingParityTarget: Hashable {
     var clipName: String
     var maxP95CenterErrorPixels: Double

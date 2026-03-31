@@ -128,6 +128,7 @@ final class AppModel {
     private let nativeExporter = NativeResearchBundleExporter()
     private let nativeScientificProcessor = NativeScientificProcessor()
     private let nativeTrackingPipeline = NativeTrackingPipeline()
+    private let nativeMultiObjectTrackingRunner = NativeMultiObjectTrackingRunner()
     private let nativeScientificReporter = NativeResearchReporter()
     private var currentVideoSource: NativeVideoSource?
     private var pendingVideoLoadID = UUID()
@@ -379,8 +380,8 @@ final class AppModel {
                 let trialName = sanitizedTrialName(for: entry.session, fallbackIndex: index + 1)
                 let outputDirectory = outputRoot.appendingPathComponent(trialName, isDirectory: true)
                 let config = try runConfiguration(from: entry.session, outputDirectory: outputDirectory)
-                let rawResult = try await engine.runAnalysis(config: config)
-                let mergedResult = postProcess(loadResult: merge(loadResult: rawResult, preserving: entry.session), sessionOverride: entry.session)
+                let rawResult = try await runNativeAnalysis(config: config, preservedSession: entry.session)
+                let mergedResult = postProcess(loadResult: rawResult, sessionOverride: entry.session)
                 let mergedSession = mergedResult.session ?? entry.session
 
                 try syncNativeResearchBundle(result: mergedResult, session: mergedSession)
@@ -891,7 +892,7 @@ final class AppModel {
         }
         guard let directory = FilePanels.chooseDirectory(title: "Choose Analysis Export Directory") else { return }
         engineState = .running
-        statusMessage = "Running Python analysis engine..."
+        statusMessage = "Running native analysis engine..."
 
         let preservedSession: SessionSnapshot
         do {
@@ -929,11 +930,11 @@ final class AppModel {
         )
 
         do {
-            let result = try await engine.runAnalysis(config: config)
-            let mergedResult = postProcess(loadResult: merge(loadResult: result, preserving: preservedSession), sessionOverride: preservedSession)
+            let result = try await runNativeAnalysis(config: config, preservedSession: preservedSession)
+            let mergedResult = postProcess(loadResult: result, sessionOverride: preservedSession)
             apply(loadResult: mergedResult)
             try syncNativeResearchBundle(result: mergedResult, session: mergedResult.session ?? preservedSession)
-            statusMessage = "Analysis complete. Native shell loaded the exported research bundle."
+            statusMessage = "Analysis complete. Native multi-object tracking is now driving the research bundle."
             selectedTab = .results
             selectedResultsTab = .insights
             engineState = .ready
@@ -2235,27 +2236,66 @@ final class AppModel {
         )
     }
 
-    private func syncNativeResearchBundle(result: AnalysisLoadResult, session: SessionSnapshot) throws {
-        let payload = NativeResearchBundlePayload(
-            session: session,
-            trackID: result.trackBundles.first(where: { $0.trackID == "primary" })?.trackID ?? activeTrackID,
-            trackName: result.trackBundles.first(where: { $0.trackID == "primary" })?.trackName ?? activeTrackLabel,
-            analysisRows: result.analysisRows,
-            pairwiseMetrics: result.pairwiseMetrics,
-            eventMarkers: eventMarkers(from: session),
-            outputDirectory: result.exportDirectory,
-            reportTemplate: session.exportPreferences?.reportTemplate ?? reportTemplate,
-            trackingProfile: session.resolvedTrackingConfig.profile ?? trackingProfile,
-            includeOverlay: session.exportPreferences?.includeOverlay ?? includeOverlay,
-            includePlots: session.exportPreferences?.includePlots ?? includePlots,
-            debugTracking: session.exportPreferences?.includeDebugTracking ?? debugTracking,
-            summary: result.summary,
-            quality: result.quality,
-            modules: result.modules
+    private func runNativeAnalysis(
+        config: NativeRunConfiguration,
+        preservedSession: SessionSnapshot
+    ) async throws -> AnalysisLoadResult {
+        let videoSource = try await NativeVideoSource.open(url: config.videoURL)
+        let experiment = try nativeMultiObjectTrackingRunner.run(
+            video: videoSource,
+            session: preservedSession
         )
-        let outputs = try nativeExporter.export(payload)
-        if let reportURL = outputs["report"] {
-            reportMarkdown = (try? String(contentsOf: reportURL, encoding: .utf8)) ?? reportMarkdown
+        return experiment.asLoadResult(
+            session: preservedSession,
+            outputDirectory: config.outputDirectory
+        )
+    }
+
+    private func syncNativeResearchBundle(result: AnalysisLoadResult, session: SessionSnapshot) throws {
+        let bundles = result.trackBundles.isEmpty
+            ? [
+                AnalysisTrackBundle(
+                    trackID: "primary",
+                    trackName: "Primary Object",
+                    trackKind: "primary",
+                    summary: result.summary,
+                    quality: result.quality,
+                    modules: result.modules,
+                    analysisRows: result.analysisRows,
+                    reportMarkdown: result.reportMarkdown,
+                    exportDirectory: result.exportDirectory
+                )
+            ]
+            : result.trackBundles
+
+        try FileManager.default.createDirectory(at: result.exportDirectory, withIntermediateDirectories: true)
+        try engine.saveSession(
+            session,
+            to: result.exportDirectory.appendingPathComponent("session.json")
+        )
+
+        for bundle in bundles {
+            let payload = NativeResearchBundlePayload(
+                session: session,
+                trackID: bundle.trackID,
+                trackName: bundle.trackName,
+                analysisRows: bundle.analysisRows,
+                pairwiseMetrics: result.pairwiseMetrics,
+                eventMarkers: bundle.trackID == "primary" ? eventMarkers(from: session) : [],
+                outputDirectory: bundle.exportDirectory,
+                reportTemplate: session.exportPreferences?.reportTemplate ?? reportTemplate,
+                trackingProfile: session.resolvedTrackingConfig.profile ?? trackingProfile,
+                includeOverlay: session.exportPreferences?.includeOverlay ?? includeOverlay,
+                includePlots: session.exportPreferences?.includePlots ?? includePlots,
+                debugTracking: session.exportPreferences?.includeDebugTracking ?? debugTracking,
+                summary: bundle.summary,
+                quality: bundle.quality,
+                modules: bundle.modules
+            )
+            let outputs = try nativeExporter.export(payload)
+            if bundle.trackID == "primary", let reportURL = outputs["report"] {
+                reportMarkdown = (try? String(contentsOf: reportURL, encoding: .utf8)) ?? reportMarkdown
+            }
         }
     }
 

@@ -151,11 +151,12 @@ The goal of the next migration phase should be to eliminate `PythonEngineBridge.
 
 ### 10. Port multi-object experiment orchestration
 
-- [ ] Create a native equivalent of `run_multi_object_experiment(...)`.
-- [ ] Track primary plus secondary objects in one coordinated run.
-- [ ] Carry track IDs, names, and kinds through results and exports.
-- [ ] Keep the reference marker compatible with multi-object runs.
-- [ ] Replace the current “Python for tracking, Swift for pairwise reconstruction” split with one native path.
+- [x] Create a native equivalent of `run_multi_object_experiment(...)`.
+- [x] Track primary plus secondary objects in one coordinated run.
+- [x] Carry track IDs, names, and kinds through results and exports.
+- [x] Keep the reference marker compatible with multi-object runs.
+- [x] Replace the current “Python for tracking, Swift for pairwise reconstruction” split with one native path.
+  Native multi-object orchestration now lives in `NativeMultiObjectTrackingRunner`, drives both single-run and workspace batch execution from Swift, exports per-track native bundles with coordinated pairwise metrics, and is covered by Swift regression tests for reference-aware multi-object runs.
 
 ### 11. Port native pairwise metrics from reconstruction helper to authoritative analysis output
 
