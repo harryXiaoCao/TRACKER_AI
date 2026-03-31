@@ -292,8 +292,6 @@ struct NativeTrackReconstruction {
 }
 
 struct NativeTrackingPipeline {
-    private let maxInterpolationGap = 3
-
     func reconstructTrack(bundle: AnalysisTrackBundle, session: SessionSnapshot) -> NativeTrackReconstruction? {
         let seedBox = seedBox(for: bundle, session: session)
         guard !bundle.analysisRows.isEmpty else {
@@ -302,13 +300,7 @@ struct NativeTrackingPipeline {
                 trackName: bundle.trackName,
                 trackKind: bundle.trackKind,
                 observations: [],
-                quality: TrackQualitySnapshot(
-                    lostSpans: nil,
-                    suspectSpans: nil,
-                    correctedSpans: nil,
-                    reacquisitionCount: nil,
-                    reviewRecommended: nil
-                ),
+                quality: NativeTrackRuntimeDerivation.emptyQuality(),
                 averageConfidence: 0
             )
         }
@@ -339,8 +331,11 @@ struct NativeTrackingPipeline {
             )
         }
 
-        let interpolated = interpolateShortGaps(observations)
-        let quality = deriveTrackQuality(from: interpolated)
+        let interpolated = NativeTrackRuntimeDerivation.interpolateShortGaps(
+            observations,
+            config: session.resolvedTrackingConfig
+        )
+        let quality = NativeTrackRuntimeDerivation.computeQualityMetadata(observations: interpolated)
         let averageConfidence = interpolated.map(\.confidence).mean()
         return NativeTrackReconstruction(
             trackID: bundle.trackID,
@@ -427,115 +422,6 @@ struct NativeTrackingPipeline {
             return object.bbox
         }
         return session.initialBbox
-    }
-
-    private func interpolateShortGaps(_ observations: [NativeTrackingObservation]) -> [NativeTrackingObservation] {
-        guard observations.count >= 3 else { return observations }
-
-        var interpolated = observations
-        var index = 1
-        while index < interpolated.count - 1 {
-            if !interpolated[index].lost {
-                index += 1
-                continue
-            }
-
-            let start = index
-            var end = index
-            while end + 1 < interpolated.count && interpolated[end + 1].lost {
-                end += 1
-            }
-
-            let gap = end - start + 1
-            if gap > maxInterpolationGap || start == 0 || end >= interpolated.count - 1 {
-                index = end + 1
-                continue
-            }
-
-            let previous = interpolated[start - 1]
-            let following = interpolated[end + 1]
-            if previous.lost || following.lost {
-                index = end + 1
-                continue
-            }
-
-            for (offset, targetIndex) in Array(start...end).enumerated() {
-                let alpha = Double(offset + 1) / Double(gap + 1)
-                let bbox = BBoxSnapshot(
-                    x: (1 - alpha) * previous.bbox.x + alpha * following.bbox.x,
-                    y: (1 - alpha) * previous.bbox.y + alpha * following.bbox.y,
-                    width: (1 - alpha) * previous.bbox.width + alpha * following.bbox.width,
-                    height: (1 - alpha) * previous.bbox.height + alpha * following.bbox.height
-                )
-                interpolated[targetIndex] = NativeTrackingObservation(
-                    frameIndex: interpolated[targetIndex].frameIndex,
-                    timeSeconds: interpolated[targetIndex].timeSeconds,
-                    centroidXPixels: (1 - alpha) * previous.centroidXPixels + alpha * following.centroidXPixels,
-                    centroidYPixels: (1 - alpha) * previous.centroidYPixels + alpha * following.centroidYPixels,
-                    bbox: bbox,
-                    confidence: min(previous.confidence, following.confidence) * 0.72,
-                    lost: false,
-                    corrected: interpolated[targetIndex].corrected,
-                    state: "suspect",
-                    failureReason: "short_gap_interpolated",
-                    source: "interpolated",
-                    isInferred: true,
-                    isInterpolated: true
-                )
-            }
-
-            index = end + 1
-        }
-
-        return interpolated
-    }
-
-    private func deriveTrackQuality(from observations: [NativeTrackingObservation]) -> TrackQualitySnapshot {
-        let lostSpans = buildSpans(from: observations, reason: "lost_tracking") { $0.lost }
-        let suspectSpans = buildSpans(from: observations, reason: "tracking_recovery") {
-            $0.state == "suspect" || $0.state == "reacquired"
-        }
-        let correctedSpans = buildSpans(from: observations, reason: "manual_correction") { $0.corrected }
-        let reacquisitionCount = observations.filter { $0.state == "reacquired" }.count
-        let reviewRecommended = !lostSpans.isEmpty || !suspectSpans.isEmpty || observations.contains { $0.confidence < 0.35 }
-        return TrackQualitySnapshot(
-            lostSpans: lostSpans,
-            suspectSpans: suspectSpans,
-            correctedSpans: correctedSpans,
-            reacquisitionCount: reacquisitionCount,
-            reviewRecommended: reviewRecommended
-        )
-    }
-
-    private func buildSpans(
-        from observations: [NativeTrackingObservation],
-        reason: String,
-        predicate: (NativeTrackingObservation) -> Bool
-    ) -> [TrackSpanSnapshot] {
-        var spans: [TrackSpanSnapshot] = []
-        var startFrame: Int?
-        var endFrame: Int?
-
-        for observation in observations {
-            let isActive = predicate(observation)
-            if isActive && startFrame == nil {
-                startFrame = observation.frameIndex
-            }
-            if isActive {
-                endFrame = observation.frameIndex
-            }
-            if !isActive, let resolvedStart = startFrame, let resolvedEnd = endFrame {
-                spans.append(TrackSpanSnapshot(startFrame: resolvedStart, endFrame: resolvedEnd, reason: reason))
-                startFrame = nil
-                endFrame = nil
-            }
-        }
-
-        if let startFrame, let endFrame {
-            spans.append(TrackSpanSnapshot(startFrame: startFrame, endFrame: endFrame, reason: reason))
-        }
-
-        return spans
     }
 
     private func normalizedState(_ state: String, lost: Bool) -> String {

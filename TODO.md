@@ -135,10 +135,11 @@ The goal of the next migration phase should be to eliminate `PythonEngineBridge.
 
 ### 08. Port interpolation and track-quality derivation as first-class runtime behavior
 
-- [ ] Move short-gap interpolation out of reconstruction-only logic and into the native runtime path.
-- [ ] Keep parity with Python’s interpolation gap limits and confidence penalties.
-- [ ] Ensure `TrackQualitySnapshot` is derived from native observations, not just rebuilt from CSV.
-- [ ] Validate lost/suspect/corrected span generation against existing Python fixtures.
+- [x] Move short-gap interpolation out of reconstruction-only logic and into the native runtime path.
+- [x] Keep parity with Python’s interpolation gap limits and confidence penalties.
+- [x] Ensure `TrackQualitySnapshot` is derived from native observations, not just rebuilt from CSV.
+- [x] Validate lost/suspect/corrected span generation against existing Python fixtures.
+  Shared runtime derivation now lives in `NativeTrackRuntimeDerivation`, is reused by both `NativeSingleObjectTrackingRunner` and `NativeTrackingPipeline`, and is covered by focused Swift tests for interpolation penalties, span/reacquisition metadata, and reconstruction config limits.
 
 ### 09. Port reference-motion correction into the native tracker pipeline
 

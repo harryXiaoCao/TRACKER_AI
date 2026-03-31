@@ -100,6 +100,92 @@ final class NativeTrackingRuntimeTests: XCTestCase {
         )
     }
 
+    func testRuntimeInterpolationMatchesPythonGapPenaltyAndMetadata() {
+        let observations = [
+            makeObservation(frameIndex: 0, x: 12, confidence: 0.9, lost: false, state: NativeTrackingState.tracking.rawValue),
+            makeObservation(frameIndex: 1, x: 18, confidence: 0.2, lost: true, state: NativeTrackingState.lost.rawValue, debug: ["search_mode": "full"]),
+            makeObservation(frameIndex: 2, x: 24, confidence: 0.1, lost: true, state: NativeTrackingState.lost.rawValue, debug: ["search_mode": "full"]),
+            makeObservation(frameIndex: 3, x: 30, confidence: 0.8, lost: false, state: NativeTrackingState.tracking.rawValue)
+        ]
+
+        let interpolated = NativeTrackRuntimeDerivation.interpolateShortGaps(
+            observations,
+            config: TrackingConfigSnapshot.pythonDefaults
+        )
+
+        XCTAssertEqual(interpolated[1].frameIndex, 1)
+        XCTAssertEqual(interpolated[2].frameIndex, 2)
+        XCTAssertFalse(interpolated[1].lost)
+        XCTAssertFalse(interpolated[2].lost)
+        XCTAssertEqual(interpolated[1].state, NativeTrackingState.suspect.rawValue)
+        XCTAssertEqual(interpolated[2].state, NativeTrackingState.suspect.rawValue)
+        XCTAssertEqual(interpolated[1].failureReason, "short_gap_interpolated")
+        XCTAssertEqual(interpolated[2].failureReason, "short_gap_interpolated")
+        XCTAssertEqual(interpolated[1].source, "interpolated")
+        XCTAssertEqual(interpolated[2].source, "interpolated")
+        XCTAssertTrue(interpolated[1].isInterpolated)
+        XCTAssertTrue(interpolated[2].isInterpolated)
+        XCTAssertEqual(interpolated[1].debug["interpolation"], "linear_short_gap")
+        XCTAssertEqual(interpolated[2].debug["interpolation"], "linear_short_gap")
+        XCTAssertEqual(interpolated[1].confidence, 0.576, accuracy: 1e-12)
+        XCTAssertEqual(interpolated[2].confidence, 0.576, accuracy: 1e-12)
+        XCTAssertEqual(interpolated[1].centroidXPixels, 18, accuracy: 1e-12)
+        XCTAssertEqual(interpolated[2].centroidXPixels, 24, accuracy: 1e-12)
+    }
+
+    func testRuntimeQualityMetadataBuildsPythonParitySpans() {
+        let observations = [
+            makeObservation(frameIndex: 0, x: 10, confidence: 0.95, lost: false, state: NativeTrackingState.tracking.rawValue),
+            makeObservation(frameIndex: 1, x: 14, confidence: 0.22, lost: true, state: NativeTrackingState.lost.rawValue),
+            makeObservation(frameIndex: 2, x: 18, confidence: 0.58, lost: false, corrected: false, state: NativeTrackingState.suspect.rawValue),
+            makeObservation(frameIndex: 3, x: 22, confidence: 0.81, lost: false, corrected: false, state: NativeTrackingState.reacquired.rawValue),
+            makeObservation(frameIndex: 4, x: 26, confidence: 0.92, lost: false, corrected: true, state: NativeTrackingState.tracking.rawValue),
+            makeObservation(frameIndex: 5, x: 30, confidence: 0.31, lost: false, corrected: true, state: NativeTrackingState.tracking.rawValue)
+        ]
+
+        let quality = NativeTrackRuntimeDerivation.computeQualityMetadata(observations: observations)
+
+        XCTAssertEqual(quality.lostSpans?.map(\.startFrame), [1])
+        XCTAssertEqual(quality.lostSpans?.map(\.endFrame), [1])
+        XCTAssertEqual(quality.lostSpans?.first?.reason, "lost_tracking")
+        XCTAssertEqual(quality.suspectSpans?.map(\.startFrame), [2])
+        XCTAssertEqual(quality.suspectSpans?.map(\.endFrame), [3])
+        XCTAssertEqual(quality.suspectSpans?.first?.reason, "tracking_recovery")
+        XCTAssertEqual(quality.correctedSpans?.map(\.startFrame), [4])
+        XCTAssertEqual(quality.correctedSpans?.map(\.endFrame), [5])
+        XCTAssertEqual(quality.correctedSpans?.first?.reason, "manual_correction")
+        XCTAssertEqual(quality.reacquisitionCount, 1)
+        XCTAssertEqual(quality.reviewRecommended, true)
+    }
+
+    func testReconstructionRespectsInterpolationGapLimitFromTrackingConfig() {
+        var config = TrackingConfigSnapshot.pythonDefaults
+        config.maxInterpolationGap = 1
+        let session = makeSessionSnapshot(trackingConfig: config)
+        let bundle = AnalysisTrackBundle(
+            trackID: "primary",
+            trackName: "Primary Object",
+            trackKind: "primary",
+            summary: nil,
+            quality: nil,
+            modules: [],
+            analysisRows: [
+                makeAnalysisRow(frameIndex: 0, xPixels: 12, trackerConfidence: 0.9, lost: false, state: "tracking"),
+                makeAnalysisRow(frameIndex: 1, xPixels: 18, trackerConfidence: 0.2, lost: true, state: "lost", failureReason: "search_exhausted"),
+                makeAnalysisRow(frameIndex: 2, xPixels: 24, trackerConfidence: 0.2, lost: true, state: "lost", failureReason: "search_exhausted"),
+                makeAnalysisRow(frameIndex: 3, xPixels: 30, trackerConfidence: 0.85, lost: false, state: "tracking")
+            ],
+            reportMarkdown: "",
+            exportDirectory: URL(fileURLWithPath: NSTemporaryDirectory())
+        )
+
+        let reconstruction = NativeTrackingPipeline().reconstructTrack(bundle: bundle, session: session)
+
+        XCTAssertEqual(reconstruction?.observations.map(\.lost), [false, true, true, false])
+        XCTAssertEqual(reconstruction?.quality.lostSpans?.map(\.startFrame), [1])
+        XCTAssertEqual(reconstruction?.quality.lostSpans?.map(\.endFrame), [2])
+    }
+
     func testNativeTrackerMeetsBenchmarkReleaseGateTargets() async throws {
         let clips = Dictionary(uniqueKeysWithValues: try loadBenchmarkClips().map { ($0.name, $0) })
         let runner = NativeSingleObjectTrackingRunner()
@@ -314,6 +400,104 @@ final class NativeTrackingRuntimeTests: XCTestCase {
             shouldInterpolate: false,
             intent: .defaultIntent
         )!
+    }
+
+    private func makeObservation(
+        frameIndex: Int,
+        x: Double,
+        confidence: Double,
+        lost: Bool,
+        corrected: Bool = false,
+        state: String,
+        debug: [String: String] = [:]
+    ) -> NativeTrackingObservation {
+        NativeTrackingObservation(
+            frameIndex: frameIndex,
+            timeSeconds: Double(frameIndex) / 30.0,
+            centroidXPixels: x,
+            centroidYPixels: 20,
+            bbox: BBoxSnapshot(x: x - 3, y: 17, width: 6, height: 6),
+            confidence: confidence,
+            lost: lost,
+            corrected: corrected,
+            state: state,
+            failureReason: lost ? "search_exhausted" : nil,
+            source: lost ? "predicted" : "measured",
+            isInferred: lost,
+            isInterpolated: false,
+            debug: debug
+        )
+    }
+
+    private func makeAnalysisRow(
+        frameIndex: Int,
+        xPixels: Double,
+        trackerConfidence: Double,
+        lost: Bool,
+        state: String,
+        failureReason: String = "",
+        corrected: Bool = false
+    ) -> AnalysisRow {
+        AnalysisRow(
+            frameIndex: frameIndex,
+            timeSeconds: Double(frameIndex) / 30.0,
+            xUnits: xPixels / 10.0,
+            yUnits: 2.0,
+            speed: 0,
+            accelerationMagnitude: 0,
+            trackerConfidence: trackerConfidence,
+            scientificConfidence: trackerConfidence,
+            xPixels: xPixels,
+            yPixels: 20,
+            rawXUnits: nil,
+            rawYUnits: nil,
+            xVelocity: nil,
+            yVelocity: nil,
+            xAcceleration: nil,
+            yAcceleration: nil,
+            angleDegrees: nil,
+            positionUncertainty: nil,
+            velocityUncertainty: nil,
+            accelerationUncertainty: nil,
+            lost: lost,
+            corrected: corrected,
+            state: state,
+            failureReason: failureReason
+        )
+    }
+
+    private func makeSessionSnapshot(trackingConfig: TrackingConfigSnapshot) -> SessionSnapshot {
+        SessionSnapshot(
+            videoPath: "/tmp/demo.mp4",
+            initialBbox: BBoxSnapshot(x: 9, y: 17, width: 6, height: 6),
+            calibration: CalibrationSnapshot(
+                referenceLength: 1.0,
+                unitLabel: "m",
+                pixelDistance: 100.0,
+                mode: nil,
+                originXPx: nil,
+                originYPx: nil,
+                axisAngleDeg: nil,
+                invertX: nil,
+                invertY: nil,
+                homography: nil,
+                presetName: nil
+            ),
+            analysisConfig: AnalysisConfigSnapshot(smoothingWindow: 7, smoothingPolyorder: 2),
+            trackingConfig: trackingConfig,
+            metadata: nil,
+            advancedMode: nil,
+            selectedStartFrame: 0,
+            selectedEndFrame: 3,
+            scalePoints: nil,
+            referenceBbox: nil,
+            corrections: nil,
+            reviewState: nil,
+            eventMarkers: nil,
+            additionalObjects: [],
+            trackQuality: nil,
+            exportPreferences: nil
+        )
     }
 }
 
