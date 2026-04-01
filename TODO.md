@@ -176,10 +176,11 @@ The goal of the next migration phase should be to eliminate `PythonEngineBridge.
 
 ### 13. Port derived event generation and selected-window analysis
 
-- [ ] Make native derived events the canonical source of events for Swift-run analyses.
-- [ ] Ensure peak speed, peak acceleration, apex, zero crossings, and window summaries match Python behavior closely enough.
-- [ ] Preserve manual event merge behavior without duplicating events.
-- [ ] Add tests for event timing and selected-window summary calculations.
+- [x] Make native derived events the canonical source of events for Swift-run analyses.
+- [x] Ensure peak speed, peak acceleration, apex, zero crossings, and window summaries match Python behavior closely enough.
+- [x] Preserve manual event merge behavior without duplicating events.
+- [x] Add tests for event timing and selected-window summary calculations.
+  Native derived-event and selected-window calculations now live in `NativeScientificProcessor`, Swift exports honor the selected review window instead of the broader run range, manual markers win when they overlap a derived event, and focused Swift regressions cover canonical event timing plus selected-window summary export.
 
 ### 14. Port built-in analyzers and experiment classification fully
 

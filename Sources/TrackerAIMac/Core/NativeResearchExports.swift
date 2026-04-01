@@ -291,6 +291,67 @@ struct NativeScientificProcessor {
         }
     }
 
+    func buildDerivedEvents(rows: [AnalysisRow], unitLabel: String) -> [EventMarkerRecord] {
+        guard !rows.isEmpty else { return [] }
+        var events: [EventMarkerRecord] = []
+
+        func peakEvent(
+            keyPath: KeyPath<AnalysisRow, Double>,
+            name: String,
+            unit: String,
+            axis: String = "",
+            note: String
+        ) {
+            guard let row = rows.max(by: { $0[keyPath: keyPath] < $1[keyPath: keyPath] }) else { return }
+            events.append(
+                EventMarkerRecord(
+                    name: name,
+                    frameIndex: row.frameIndex,
+                    timeSeconds: row.timeSeconds,
+                    value: row[keyPath: keyPath],
+                    unitLabel: unit,
+                    axis: axis,
+                    note: note,
+                    origin: "derived"
+                )
+            )
+        }
+
+        peakEvent(keyPath: \.speed, name: "peak_speed", unit: "\(unitLabel)/s", note: "Maximum speed")
+        peakEvent(keyPath: \.accelerationMagnitude, name: "peak_acceleration", unit: "\(unitLabel)/s^2", note: "Maximum acceleration")
+        peakEvent(keyPath: \.yUnits, name: "apex", unit: unitLabel, axis: "y", note: "Maximum vertical position")
+        peakEvent(keyPath: \.xUnits, name: "furthest_x", unit: unitLabel, axis: "x", note: "Maximum horizontal position")
+
+        events.append(contentsOf: zeroCrossingEvents(rows: rows, keyPath: \.yVelocity, name: "vy_zero_crossing", unitLabel: "\(unitLabel)/s", axis: "y"))
+        events.append(contentsOf: zeroCrossingEvents(rows: rows, keyPath: \.xVelocity, name: "vx_zero_crossing", unitLabel: "\(unitLabel)/s", axis: "x"))
+
+        return deduplicateEvents(events, preferManual: false)
+    }
+
+    func summarizeWindow(rows: [AnalysisRow], startFrame: Int?, endFrame: Int?) -> NativeWindowSummary? {
+        guard !rows.isEmpty else { return nil }
+        let firstFrame = rows.first?.frameIndex ?? 0
+        let lastFrame = rows.last?.frameIndex ?? 0
+        let boundedStart = max(min(startFrame ?? firstFrame, endFrame ?? lastFrame), firstFrame)
+        let boundedEnd = min(max(startFrame ?? firstFrame, endFrame ?? lastFrame), lastFrame)
+        guard boundedEnd > boundedStart else { return nil }
+
+        let windowRows = rows.filter { $0.frameIndex >= boundedStart && $0.frameIndex <= boundedEnd }
+        guard let first = windowRows.first, let last = windowRows.last, windowRows.count > 1 else { return nil }
+
+        let dx = last.xUnits - first.xUnits
+        let dy = last.yUnits - first.yUnits
+        return NativeWindowSummary(
+            startFrame: boundedStart,
+            endFrame: boundedEnd,
+            durationSeconds: max(last.timeSeconds - first.timeSeconds, 0),
+            displacement: sqrt((dx * dx) + (dy * dy)),
+            meanSpeed: windowRows.map(\.speed).mean(),
+            maxSpeed: windowRows.map(\.speed).max() ?? 0,
+            maxAcceleration: windowRows.map(\.accelerationMagnitude).max() ?? 0
+        )
+    }
+
     private func smoothSeries(_ values: [Double], config: AnalysisConfigSnapshot) -> [Double] {
         guard values.count >= 5 else { return values }
         let cappedWindow = min(config.smoothingWindow, values.count.isMultiple(of: 2) ? values.count - 1 : values.count)
@@ -386,6 +447,65 @@ struct NativeScientificProcessor {
 
     private func clamp(_ value: Double, min minimum: Double = 0.0, max maximum: Double = 1.0) -> Double {
         Swift.max(minimum, Swift.min(maximum, value))
+    }
+
+    private func zeroCrossingEvents(
+        rows: [AnalysisRow],
+        keyPath: KeyPath<AnalysisRow, Double?>,
+        name: String,
+        unitLabel: String,
+        axis: String
+    ) -> [EventMarkerRecord] {
+        guard rows.count >= 2 else { return [] }
+        var events: [EventMarkerRecord] = []
+        var previous = sign(of: rows[0][keyPath: keyPath] ?? 0)
+        for row in rows.dropFirst() {
+            let current = sign(of: row[keyPath: keyPath] ?? 0)
+            if current == 0 || previous == 0 {
+                previous = current
+                continue
+            }
+            if current != previous {
+                events.append(
+                    EventMarkerRecord(
+                        name: name,
+                        frameIndex: row.frameIndex,
+                        timeSeconds: row.timeSeconds,
+                        value: row[keyPath: keyPath] ?? 0,
+                        unitLabel: unitLabel,
+                        axis: axis,
+                        note: "Zero crossing",
+                        origin: "derived"
+                    )
+                )
+            }
+            previous = current
+        }
+        return events
+    }
+
+    private func sign(of value: Double) -> Int {
+        if value > 0 { return 1 }
+        if value < 0 { return -1 }
+        return 0
+    }
+
+    private func deduplicateEvents(_ events: [EventMarkerRecord], preferManual: Bool) -> [EventMarkerRecord] {
+        var seen = Set<String>()
+        let ordered = events.sorted { lhs, rhs in
+            let lhsPriority = preferManual && lhs.origin == "manual" ? 0 : 1
+            let rhsPriority = preferManual && rhs.origin == "manual" ? 0 : 1
+            return (lhs.frameIndex, lhs.name, lhs.axis, lhsPriority, lhs.origin) < (rhs.frameIndex, rhs.name, rhs.axis, rhsPriority, rhs.origin)
+        }
+
+        var filtered: [EventMarkerRecord] = []
+        for event in ordered {
+            let key = "\(event.name)|\(event.frameIndex)|\(event.axis)"
+            if seen.insert(key).inserted {
+                filtered.append(event)
+            }
+        }
+        return filtered
     }
 }
 
@@ -567,6 +687,8 @@ struct NativeTrackingPipeline {
 }
 
 struct NativeResearchBundleExporter {
+    private let scientificProcessor = NativeScientificProcessor()
+
     func exportPairwiseMetrics(_ metrics: [PairwiseMetricSnapshot], to directory: URL) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let pairwiseURL = directory.appendingPathComponent("pairwise_metrics.csv")
@@ -661,7 +783,11 @@ struct NativeResearchBundleExporter {
         try reportMarkdown.write(to: reportURL, atomically: true, encoding: .utf8)
         try (reproduceCommand + "\n").write(to: reproduceURL, atomically: true, encoding: .utf8)
 
-        if let window = summarizeWindow(rows: payload.analysisRows, startFrame: payload.session.selectedStartFrame, endFrame: payload.session.selectedEndFrame) {
+        if let window = scientificProcessor.summarizeWindow(
+            rows: payload.analysisRows,
+            startFrame: payload.session.reviewState?.selectedWindowStart ?? payload.session.selectedStartFrame,
+            endFrame: payload.session.reviewState?.selectedWindowEnd ?? payload.session.selectedEndFrame
+        ) {
             try encoder.encode(window).write(to: windowURL)
         }
 
@@ -856,26 +982,7 @@ struct NativeResearchBundleExporter {
     }
 
     private func summarizeWindow(rows: [AnalysisRow], startFrame: Int?, endFrame: Int?) -> NativeWindowSummary? {
-        guard !rows.isEmpty else { return nil }
-        let start = max(startFrame ?? rows.first?.frameIndex ?? 0, rows.first?.frameIndex ?? 0)
-        let end = min(endFrame ?? rows.last?.frameIndex ?? 0, rows.last?.frameIndex ?? 0)
-        let windowRows = rows.filter { $0.frameIndex >= start && $0.frameIndex <= end }
-        guard windowRows.count > 1 else { return nil }
-
-        let first = windowRows[0]
-        let last = windowRows[windowRows.count - 1]
-        let dx = last.xUnits - first.xUnits
-        let dy = last.yUnits - first.yUnits
-
-        return NativeWindowSummary(
-            startFrame: start,
-            endFrame: end,
-            durationSeconds: max(last.timeSeconds - first.timeSeconds, 0),
-            displacement: sqrt((dx * dx) + (dy * dy)),
-            meanSpeed: windowRows.map(\.speed).mean(),
-            maxSpeed: windowRows.map(\.speed).max() ?? 0,
-            maxAcceleration: windowRows.map(\.accelerationMagnitude).max() ?? 0
-        )
+        scientificProcessor.summarizeWindow(rows: rows, startFrame: startFrame, endFrame: endFrame)
     }
 
     private func buildReproduceCommand(
@@ -1048,6 +1155,8 @@ struct NativeResearchBundleExporter {
 }
 
 struct NativeResearchReporter {
+    private let scientificProcessor = NativeScientificProcessor()
+
     func rebuildPairwiseMetrics(trackBundles: [AnalysisTrackBundle]) -> [PairwiseMetricSnapshot] {
         let eligibleBundles = trackBundles
             .filter { $0.trackKind != "reference" && !$0.analysisRows.isEmpty }
@@ -1444,102 +1553,13 @@ struct NativeResearchReporter {
         rows: [AnalysisRow],
         classification: ExperimentClassificationSnapshot
     ) -> [EventMarkerRecord] {
-        guard !rows.isEmpty else { return [] }
-        let unitLabel = session.calibration.unitLabel
-        var events: [EventMarkerRecord] = []
-
-        func peakEvent(_ rows: [AnalysisRow], keyPath: KeyPath<AnalysisRow, Double>, name: String, unit: String, axis: String = "", note: String) {
-            guard let row = rows.max(by: { $0[keyPath: keyPath] < $1[keyPath: keyPath] }) else { return }
-            events.append(
-                EventMarkerRecord(
-                    name: name,
-                    frameIndex: row.frameIndex,
-                    timeSeconds: row.timeSeconds,
-                    value: row[keyPath: keyPath],
-                    unitLabel: unit,
-                    axis: axis,
-                    note: note,
-                    origin: "derived"
-                )
-            )
-        }
-
-        peakEvent(rows, keyPath: \.speed, name: "peak_speed", unit: "\(unitLabel)/s", note: "Maximum speed")
-        peakEvent(rows, keyPath: \.accelerationMagnitude, name: "peak_acceleration", unit: "\(unitLabel)/s^2", note: "Maximum acceleration")
-        peakEvent(rows, keyPath: \.yUnits, name: "apex", unit: unitLabel, axis: "y", note: "Maximum vertical position")
-        peakEvent(rows, keyPath: \.xUnits, name: "furthest_x", unit: unitLabel, axis: "x", note: "Maximum horizontal position")
-
-        events.append(contentsOf: zeroCrossingEvents(rows: rows, keyPath: \.yVelocity, name: "vy_zero_crossing", unitLabel: "\(unitLabel)/s", axis: "y"))
-        events.append(contentsOf: zeroCrossingEvents(rows: rows, keyPath: \.xVelocity, name: "vx_zero_crossing", unitLabel: "\(unitLabel)/s", axis: "x"))
-
-        if let releaseRow = rows.first(where: { !$0.lost && $0.trackerConfidence >= 0.35 }) {
-            events.append(
-                EventMarkerRecord(
-                    name: "release_candidate",
-                    frameIndex: releaseRow.frameIndex,
-                    timeSeconds: releaseRow.timeSeconds,
-                    value: releaseRow.speed,
-                    unitLabel: "\(unitLabel)/s",
-                    axis: "",
-                    note: "First reliable tracked frame for \(classification.title.lowercased()).",
-                    origin: "derived"
-                )
-            )
-        }
-
-        if classification.classificationID.contains("collision"),
-           let contactRow = rows.max(by: { $0.accelerationMagnitude < $1.accelerationMagnitude }) {
-            events.append(
-                EventMarkerRecord(
-                    name: "contact_candidate",
-                    frameIndex: contactRow.frameIndex,
-                    timeSeconds: contactRow.timeSeconds,
-                    value: contactRow.accelerationMagnitude,
-                    unitLabel: "\(unitLabel)/s^2",
-                    axis: "",
-                    note: "High-impulse frame associated with the collision classifier.",
-                    origin: "derived"
-                )
-            )
-        }
-
-        if let start = session.reviewState?.selectedWindowStart,
-           let startRow = rows.first(where: { $0.frameIndex >= start }) {
-            events.append(
-                EventMarkerRecord(
-                    name: "review_window_start",
-                    frameIndex: startRow.frameIndex,
-                    timeSeconds: startRow.timeSeconds,
-                    value: startRow.xUnits,
-                    unitLabel: unitLabel,
-                    axis: "x",
-                    note: "Selected review window start.",
-                    origin: "derived"
-                )
-            )
-        }
-        if let end = session.reviewState?.selectedWindowEnd,
-           let endRow = rows.last(where: { $0.frameIndex <= end }) {
-            events.append(
-                EventMarkerRecord(
-                    name: "review_window_end",
-                    frameIndex: endRow.frameIndex,
-                    timeSeconds: endRow.timeSeconds,
-                    value: endRow.xUnits,
-                    unitLabel: unitLabel,
-                    axis: "x",
-                    note: "Selected review window end.",
-                    origin: "derived"
-                )
-            )
-        }
-
-        return deduplicateEvents(events)
+        _ = classification
+        return scientificProcessor.buildDerivedEvents(rows: rows, unitLabel: session.calibration.unitLabel)
     }
 
     func mergeEventMarkers(_ eventMarkers: [EventMarkerRecord], withDerived derivedEvents: [EventMarkerRecord]) -> [EventMarkerRecord] {
         let manual = eventMarkers.filter { $0.origin == "manual" }
-        return deduplicateEvents(manual + derivedEvents)
+        return deduplicateEvents(manual + derivedEvents, preferManual: true)
     }
 
     func sessionByUpdatingDerivedArtifacts(
@@ -1579,50 +1599,17 @@ struct NativeResearchReporter {
         )
     }
 
-    private func zeroCrossingEvents(
-        rows: [AnalysisRow],
-        keyPath: KeyPath<AnalysisRow, Double?>,
-        name: String,
-        unitLabel: String,
-        axis: String
-    ) -> [EventMarkerRecord] {
-        guard rows.count >= 2 else { return [] }
-        var events: [EventMarkerRecord] = []
-        var previous = sign(of: rows[0][keyPath: keyPath] ?? 0)
-        for row in rows.dropFirst() {
-            let current = sign(of: row[keyPath: keyPath] ?? 0)
-            if current != 0, previous != 0, current != previous {
-                events.append(
-                    EventMarkerRecord(
-                        name: name,
-                        frameIndex: row.frameIndex,
-                        timeSeconds: row.timeSeconds,
-                        value: row[keyPath: keyPath] ?? 0,
-                        unitLabel: unitLabel,
-                        axis: axis,
-                        note: "Zero crossing",
-                        origin: "derived"
-                    )
-                )
-            }
-            if current != 0 {
-                previous = current
-            }
-        }
-        return events
-    }
-
-    private func sign(of value: Double) -> Int {
-        if value > 0 { return 1 }
-        if value < 0 { return -1 }
-        return 0
-    }
-
-    private func deduplicateEvents(_ events: [EventMarkerRecord]) -> [EventMarkerRecord] {
+    private func deduplicateEvents(_ events: [EventMarkerRecord], preferManual: Bool) -> [EventMarkerRecord] {
         var seen = Set<String>()
+        let ordered = events.sorted { lhs, rhs in
+            let lhsPriority = preferManual && lhs.origin == "manual" ? 0 : 1
+            let rhsPriority = preferManual && rhs.origin == "manual" ? 0 : 1
+            return (lhs.frameIndex, lhs.name, lhs.axis, lhsPriority, lhs.origin) < (rhs.frameIndex, rhs.name, rhs.axis, rhsPriority, rhs.origin)
+        }
+
         var filtered: [EventMarkerRecord] = []
-        for event in events.sorted(by: { ($0.frameIndex, $0.name, $0.origin) < ($1.frameIndex, $1.name, $1.origin) }) {
-            let key = "\(event.name)|\(event.frameIndex)|\(event.origin)|\(event.axis)"
+        for event in ordered {
+            let key = "\(event.name)|\(event.frameIndex)|\(event.axis)"
             if seen.insert(key).inserted {
                 filtered.append(event)
             }
@@ -1833,26 +1820,7 @@ struct NativeResearchReporter {
     }
 
     private func summarizeWindow(rows: [AnalysisRow], startFrame: Int?, endFrame: Int?) -> NativeWindowSummary? {
-        guard !rows.isEmpty else { return nil }
-        let start = max(startFrame ?? rows.first?.frameIndex ?? 0, rows.first?.frameIndex ?? 0)
-        let end = min(endFrame ?? rows.last?.frameIndex ?? 0, rows.last?.frameIndex ?? 0)
-        let windowRows = rows.filter { $0.frameIndex >= start && $0.frameIndex <= end }
-        guard windowRows.count > 1 else { return nil }
-
-        let first = windowRows[0]
-        let last = windowRows[windowRows.count - 1]
-        let dx = last.xUnits - first.xUnits
-        let dy = last.yUnits - first.yUnits
-
-        return NativeWindowSummary(
-            startFrame: start,
-            endFrame: end,
-            durationSeconds: max(last.timeSeconds - first.timeSeconds, 0),
-            displacement: sqrt((dx * dx) + (dy * dy)),
-            meanSpeed: windowRows.map(\.speed).mean(),
-            maxSpeed: windowRows.map(\.speed).max() ?? 0,
-            maxAcceleration: windowRows.map(\.accelerationMagnitude).max() ?? 0
-        )
+        scientificProcessor.summarizeWindow(rows: rows, startFrame: startFrame, endFrame: endFrame)
     }
 
     private func qcBadge(

@@ -172,7 +172,7 @@ final class AppModel {
     }
     var canRunAnalysis: Bool { currentVideoURL != nil && isTargetReady && isScaleReady && calibrationValidationMessage == nil }
     var maxFrame: Double { Double(max(endFrame, startFrame + 1)) }
-    var allEvents: [EventMarkerRecord] { (derivedEvents + manualEvents).sorted { ($0.frameIndex, $0.name) < ($1.frameIndex, $1.name) } }
+    var allEvents: [EventMarkerRecord] { nativeScientificReporter.mergeEventMarkers(manualEvents, withDerived: derivedEvents) }
     var activeTrackBundle: AnalysisTrackBundle? {
         trackBundles.first(where: { $0.trackID == activeTrackID }) ?? trackBundles.first
     }
