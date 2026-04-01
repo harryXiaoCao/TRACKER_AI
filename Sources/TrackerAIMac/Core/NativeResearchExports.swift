@@ -67,31 +67,31 @@ struct NativeBatchComparisonSnapshot: Codable {
 }
 
 struct NativeScientificProcessor {
-    func process(rows: [AnalysisRow], session: SessionSnapshot) -> [AnalysisRow] {
-        guard !rows.isEmpty else { return [] }
+    func process(
+        observations: [NativeTrackingObservation],
+        calibration: CalibrationProfile,
+        config: AnalysisConfigSnapshot
+    ) -> [AnalysisRow] {
+        guard !observations.isEmpty else { return [] }
 
-        let config = session.analysisConfig
-        let times = rows.map(\.timeSeconds)
-        let calibrationProfile = try? session.calibration.makeCalibrationProfile()
-        let rawCoordinates = rows.map { row -> (Double, Double) in
-            if let rawXUnits = row.rawXUnits, let rawYUnits = row.rawYUnits {
-                return (rawXUnits, rawYUnits)
-            }
-            if let calibrationProfile, let xPixels = row.xPixels, let yPixels = row.yPixels {
-                return calibrationProfile.transformPoint(xPx: xPixels, yPx: yPixels)
-            }
-            return (row.xUnits, row.yUnits)
-        }
+        let times = observations.map(\.timeSeconds)
+        let xPixels = observations.map(\.centroidXPixels)
+        let yPixels = observations.map(\.centroidYPixels)
+        let confidence = observations.map(\.confidence)
+        let correctedFlags = observations.map(\.corrected)
+        let lostFlags = observations.map(\.lost)
+
+        let rawCoordinates = zip(xPixels, yPixels).map { calibration.transformPoint(xPx: $0, yPx: $1) }
         let rawX = rawCoordinates.map(\.0)
         let rawY = rawCoordinates.map(\.1)
-        let xUnits = smoothSeries(rawX, window: config.smoothingWindow, polyorder: config.smoothingPolyorder)
-        let yUnits = smoothSeries(rawY, window: config.smoothingWindow, polyorder: config.smoothingPolyorder)
-        let deltaX = zip(xUnits, rawX).map { lhs, rhs in lhs - rhs }
-        let deltaY = zip(yUnits, rawY).map { lhs, rhs in lhs - rhs }
-        let positionUncertainty = zip(deltaX, deltaY).map { dx, dy in
-            sqrt((dx * dx) + (dy * dy))
+        let xUnits = smoothSeries(rawX, config: config)
+        let yUnits = smoothSeries(rawY, config: config)
+        let positionUncertainty = zip(xUnits, yUnits).enumerated().map { index, values in
+            let deltaX = values.0 - rawX[index]
+            let deltaY = values.1 - rawY[index]
+            return sqrt((deltaX * deltaX) + (deltaY * deltaY))
         }
-        let referenceLength = max(session.calibration.referenceLength, 1e-6)
+        let referenceLength = max(calibration.referenceLength, 1e-6)
 
         let xVelocity: [Double]
         let yVelocity: [Double]
@@ -103,8 +103,8 @@ struct NativeScientificProcessor {
         let velocityUncertainty: [Double]
         let accelerationUncertainty: [Double]
 
-        if rows.count < 2 {
-            let zeros = Array(repeating: 0.0, count: rows.count)
+        if observations.count < 2 {
+            let zeros = Array(repeating: 0.0, count: observations.count)
             xVelocity = zeros
             yVelocity = zeros
             xAcceleration = zeros
@@ -115,64 +115,187 @@ struct NativeScientificProcessor {
             velocityUncertainty = zeros
             accelerationUncertainty = zeros
         } else {
-            xVelocity = finiteDifferences(values: xUnits, times: times)
-            yVelocity = finiteDifferences(values: yUnits, times: times)
-            xAcceleration = finiteDifferences(values: xVelocity, times: times)
-            yAcceleration = finiteDifferences(values: yVelocity, times: times)
+            xVelocity = gradient(values: xUnits, coordinates: times)
+            yVelocity = gradient(values: yUnits, coordinates: times)
+            xAcceleration = gradient(values: xVelocity, coordinates: times)
+            yAcceleration = gradient(values: yVelocity, coordinates: times)
             speed = zip(xVelocity, yVelocity).map { sqrt(($0 * $0) + ($1 * $1)) }
             accelerationMagnitude = zip(xAcceleration, yAcceleration).map { sqrt(($0 * $0) + ($1 * $1)) }
             angleDegrees = zip(yVelocity, xVelocity).map { atan2($0, $1) * 180 / .pi }
-            velocityUncertainty = finiteDifferences(values: positionUncertainty, times: times).map(abs)
-            accelerationUncertainty = finiteDifferences(values: velocityUncertainty, times: times).map(abs)
+            velocityUncertainty = gradient(values: positionUncertainty, coordinates: times).map(abs)
+            accelerationUncertainty = gradient(values: velocityUncertainty, coordinates: times).map(abs)
         }
 
-        let scientificConfidence = rows.enumerated().map { index, row in
+        let scientificConfidence = confidence.enumerated().map { index, trackerConfidence in
             let uncertaintyPenalty = min((positionUncertainty[safe: index] ?? 0) / referenceLength, 0.35)
-            let correctedPenalty = row.corrected ? 0.10 : 0.0
-            let lostPenalty = row.lost ? 0.18 : 0.0
-            return clamp(row.trackerConfidence - uncertaintyPenalty - correctedPenalty - lostPenalty)
+            let correctedPenalty = correctedFlags[safe: index] == true ? 0.10 : 0.0
+            let lostPenalty = lostFlags[safe: index] == true ? 0.18 : 0.0
+            return clamp(trackerConfidence - uncertaintyPenalty - correctedPenalty - lostPenalty)
         }
 
-        return rows.enumerated().map { index, row in
+        return observations.enumerated().map { index, observation in
             AnalysisRow(
-                frameIndex: row.frameIndex,
-                timeSeconds: row.timeSeconds,
-                xUnits: xUnits[safe: index] ?? row.xUnits,
-                yUnits: yUnits[safe: index] ?? row.yUnits,
-                speed: speed[safe: index] ?? row.speed,
-                accelerationMagnitude: accelerationMagnitude[safe: index] ?? row.accelerationMagnitude,
-                trackerConfidence: row.trackerConfidence,
-                scientificConfidence: scientificConfidence[safe: index] ?? row.scientificConfidence,
-                xPixels: row.xPixels,
-                yPixels: row.yPixels,
-                rawXUnits: rawX[safe: index] ?? row.rawXUnits,
-                rawYUnits: rawY[safe: index] ?? row.rawYUnits,
-                xVelocity: xVelocity[safe: index] ?? row.xVelocity,
-                yVelocity: yVelocity[safe: index] ?? row.yVelocity,
-                xAcceleration: xAcceleration[safe: index] ?? row.xAcceleration,
-                yAcceleration: yAcceleration[safe: index] ?? row.yAcceleration,
-                angleDegrees: angleDegrees[safe: index] ?? row.angleDegrees,
-                positionUncertainty: positionUncertainty[safe: index] ?? row.positionUncertainty,
-                velocityUncertainty: velocityUncertainty[safe: index] ?? row.velocityUncertainty,
-                accelerationUncertainty: accelerationUncertainty[safe: index] ?? row.accelerationUncertainty,
-                lost: row.lost,
-                corrected: row.corrected,
-                state: row.state,
-                failureReason: row.failureReason
+                frameIndex: observation.frameIndex,
+                timeSeconds: observation.timeSeconds,
+                xUnits: xUnits[safe: index] ?? rawX[index],
+                yUnits: yUnits[safe: index] ?? rawY[index],
+                speed: speed[safe: index] ?? 0,
+                accelerationMagnitude: accelerationMagnitude[safe: index] ?? 0,
+                trackerConfidence: observation.confidence,
+                scientificConfidence: scientificConfidence[safe: index] ?? observation.confidence,
+                xPixels: observation.centroidXPixels,
+                yPixels: observation.centroidYPixels,
+                rawXUnits: rawX[safe: index],
+                rawYUnits: rawY[safe: index],
+                xVelocity: xVelocity[safe: index],
+                yVelocity: yVelocity[safe: index],
+                xAcceleration: xAcceleration[safe: index],
+                yAcceleration: yAcceleration[safe: index],
+                angleDegrees: angleDegrees[safe: index],
+                positionUncertainty: positionUncertainty[safe: index],
+                velocityUncertainty: velocityUncertainty[safe: index],
+                accelerationUncertainty: accelerationUncertainty[safe: index],
+                lost: observation.lost,
+                corrected: observation.corrected,
+                state: observation.state,
+                failureReason: observation.failureReason ?? ""
             )
         }
     }
 
-    private func smoothSeries(_ values: [Double], window: Int, polyorder: Int) -> [Double] {
-        guard values.count >= 5 else { return values }
-        let maxWindow = values.count.isMultiple(of: 2) ? values.count - 1 : values.count
-        var cappedWindow = min(window, maxWindow)
-        if cappedWindow.isMultiple(of: 2) {
-            cappedWindow = max(3, cappedWindow - 1)
+    func process(rows: [AnalysisRow], session: SessionSnapshot) -> [AnalysisRow] {
+        guard !rows.isEmpty else { return [] }
+
+        let calibrationProfile = try? session.calibration.makeCalibrationProfile()
+        guard let calibrationProfile else { return rows }
+
+        if rows.allSatisfy({ $0.xPixels != nil && $0.yPixels != nil }) {
+            let observations = rows.map { row in
+                let xPixels = row.xPixels ?? 0
+                let yPixels = row.yPixels ?? 0
+                return NativeTrackingObservation(
+                    frameIndex: row.frameIndex,
+                    timeSeconds: row.timeSeconds,
+                    centroidXPixels: xPixels,
+                    centroidYPixels: yPixels,
+                    bbox: BBoxSnapshot(x: xPixels, y: yPixels, width: 1, height: 1),
+                    confidence: row.trackerConfidence,
+                    lost: row.lost,
+                    corrected: row.corrected,
+                    state: row.state,
+                    failureReason: row.failureReason.isEmpty ? nil : row.failureReason,
+                    source: row.lost ? "predicted" : (row.corrected ? "manual_correction" : "measured"),
+                    isInferred: row.lost,
+                    isInterpolated: false
+                )
+            }
+
+            let processed = process(
+                observations: observations,
+                calibration: calibrationProfile,
+                config: session.analysisConfig
+            )
+
+            return processed.enumerated().map { index, processedRow in
+                let originalRow = rows[index]
+                return AnalysisRow(
+                    frameIndex: processedRow.frameIndex,
+                    timeSeconds: processedRow.timeSeconds,
+                    xUnits: processedRow.xUnits,
+                    yUnits: processedRow.yUnits,
+                    speed: processedRow.speed,
+                    accelerationMagnitude: processedRow.accelerationMagnitude,
+                    trackerConfidence: processedRow.trackerConfidence,
+                    scientificConfidence: processedRow.scientificConfidence,
+                    xPixels: originalRow.xPixels ?? processedRow.xPixels,
+                    yPixels: originalRow.yPixels ?? processedRow.yPixels,
+                    rawXUnits: originalRow.rawXUnits ?? processedRow.rawXUnits,
+                    rawYUnits: originalRow.rawYUnits ?? processedRow.rawYUnits,
+                    xVelocity: processedRow.xVelocity,
+                    yVelocity: processedRow.yVelocity,
+                    xAcceleration: processedRow.xAcceleration,
+                    yAcceleration: processedRow.yAcceleration,
+                    angleDegrees: processedRow.angleDegrees,
+                    positionUncertainty: processedRow.positionUncertainty,
+                    velocityUncertainty: processedRow.velocityUncertainty,
+                    accelerationUncertainty: processedRow.accelerationUncertainty,
+                    lost: processedRow.lost,
+                    corrected: processedRow.corrected,
+                    state: processedRow.state,
+                    failureReason: processedRow.failureReason
+                )
+            }
         }
+
+        let rawCoordinates = rows.map { row -> (Double, Double) in
+            if let rawXUnits = row.rawXUnits, let rawYUnits = row.rawYUnits {
+                return (rawXUnits, rawYUnits)
+            }
+            if let xPixels = row.xPixels, let yPixels = row.yPixels {
+                return calibrationProfile.transformPoint(xPx: xPixels, yPx: yPixels)
+            }
+            return (row.xUnits, row.yUnits)
+        }
+        let rawX = rawCoordinates.map(\.0)
+        let rawY = rawCoordinates.map(\.1)
+        let xUnits = smoothSeries(rawX, config: session.analysisConfig)
+        let yUnits = smoothSeries(rawY, config: session.analysisConfig)
+        let times = rows.map(\.timeSeconds)
+        let positionUncertainty = zip(xUnits, yUnits).enumerated().map { index, values in
+            let deltaX = values.0 - rawX[index]
+            let deltaY = values.1 - rawY[index]
+            return sqrt((deltaX * deltaX) + (deltaY * deltaY))
+        }
+
+        let xVelocity = rows.count < 2 ? Array(repeating: 0.0, count: rows.count) : gradient(values: xUnits, coordinates: times)
+        let yVelocity = rows.count < 2 ? Array(repeating: 0.0, count: rows.count) : gradient(values: yUnits, coordinates: times)
+        let xAcceleration = rows.count < 2 ? Array(repeating: 0.0, count: rows.count) : gradient(values: xVelocity, coordinates: times)
+        let yAcceleration = rows.count < 2 ? Array(repeating: 0.0, count: rows.count) : gradient(values: yVelocity, coordinates: times)
+        let speed = zip(xVelocity, yVelocity).map { sqrt(($0 * $0) + ($1 * $1)) }
+        let accelerationMagnitude = zip(xAcceleration, yAcceleration).map { sqrt(($0 * $0) + ($1 * $1)) }
+        let angleDegrees = zip(yVelocity, xVelocity).map { atan2($0, $1) * 180 / .pi }
+        let velocityUncertainty = rows.count < 2 ? Array(repeating: 0.0, count: rows.count) : gradient(values: positionUncertainty, coordinates: times).map(abs)
+        let accelerationUncertainty = rows.count < 2 ? Array(repeating: 0.0, count: rows.count) : gradient(values: velocityUncertainty, coordinates: times).map(abs)
+        let referenceLength = max(calibrationProfile.referenceLength, 1e-6)
+
+        return rows.enumerated().map { index, originalRow in
+            let uncertaintyPenalty = min((positionUncertainty[safe: index] ?? 0) / referenceLength, 0.35)
+            let correctedPenalty = originalRow.corrected ? 0.10 : 0.0
+            let lostPenalty = originalRow.lost ? 0.18 : 0.0
+            return AnalysisRow(
+                frameIndex: originalRow.frameIndex,
+                timeSeconds: originalRow.timeSeconds,
+                xUnits: xUnits[safe: index] ?? originalRow.xUnits,
+                yUnits: yUnits[safe: index] ?? originalRow.yUnits,
+                speed: speed[safe: index] ?? originalRow.speed,
+                accelerationMagnitude: accelerationMagnitude[safe: index] ?? originalRow.accelerationMagnitude,
+                trackerConfidence: originalRow.trackerConfidence,
+                scientificConfidence: clamp(originalRow.trackerConfidence - uncertaintyPenalty - correctedPenalty - lostPenalty),
+                xPixels: originalRow.xPixels,
+                yPixels: originalRow.yPixels,
+                rawXUnits: originalRow.rawXUnits ?? rawX[safe: index],
+                rawYUnits: originalRow.rawYUnits ?? rawY[safe: index],
+                xVelocity: xVelocity[safe: index],
+                yVelocity: yVelocity[safe: index],
+                xAcceleration: xAcceleration[safe: index],
+                yAcceleration: yAcceleration[safe: index],
+                angleDegrees: angleDegrees[safe: index],
+                positionUncertainty: positionUncertainty[safe: index],
+                velocityUncertainty: velocityUncertainty[safe: index],
+                accelerationUncertainty: accelerationUncertainty[safe: index],
+                lost: originalRow.lost,
+                corrected: originalRow.corrected,
+                state: originalRow.state,
+                failureReason: originalRow.failureReason
+            )
+        }
+    }
+
+    private func smoothSeries(_ values: [Double], config: AnalysisConfigSnapshot) -> [Double] {
+        guard values.count >= 5 else { return values }
+        let cappedWindow = min(config.smoothingWindow, values.count.isMultiple(of: 2) ? values.count - 1 : values.count)
         guard cappedWindow >= 3 else { return values }
-        let localOrder = min(polyorder, cappedWindow - 1)
-        guard localOrder > 0 else { return values }
+        let localOrder = min(config.smoothingPolyorder, cappedWindow - 1)
         return polyfitSmooth(values: values, window: cappedWindow, polyorder: localOrder)
     }
 
@@ -233,22 +356,30 @@ struct NativeScientificProcessor {
         }
     }
 
-    private func finiteDifferences(values: [Double], times: [Double]) -> [Double] {
-        guard values.count == times.count, !values.isEmpty else { return [] }
+    private func gradient(values: [Double], coordinates: [Double]) -> [Double] {
+        guard values.count == coordinates.count, !values.isEmpty else { return [] }
         guard values.count > 1 else { return [0] }
 
+        if values.count == 2 {
+            let step = max(coordinates[1] - coordinates[0], 1e-9)
+            let slope = (values[1] - values[0]) / step
+            return [slope, slope]
+        }
+
         var result = Array(repeating: 0.0, count: values.count)
-        for index in values.indices {
-            if index == 0 {
-                let dt = max(times[1] - times[0], 1e-9)
-                result[index] = (values[1] - values[0]) / dt
-            } else if index == values.count - 1 {
-                let dt = max(times[index] - times[index - 1], 1e-9)
-                result[index] = (values[index] - values[index - 1]) / dt
-            } else {
-                let dt = max(times[index + 1] - times[index - 1], 1e-9)
-                result[index] = (values[index + 1] - values[index - 1]) / dt
-            }
+        let leadingStep = max(coordinates[1] - coordinates[0], 1e-9)
+        result[0] = (values[1] - values[0]) / leadingStep
+
+        let trailingStep = max(coordinates[values.count - 1] - coordinates[values.count - 2], 1e-9)
+        result[values.count - 1] = (values[values.count - 1] - values[values.count - 2]) / trailingStep
+
+        for index in 1..<(values.count - 1) {
+            let leftStep = max(coordinates[index] - coordinates[index - 1], 1e-9)
+            let rightStep = max(coordinates[index + 1] - coordinates[index], 1e-9)
+            let leftWeight = -rightStep / (leftStep * (leftStep + rightStep))
+            let centerWeight = (rightStep - leftStep) / (leftStep * rightStep)
+            let rightWeight = leftStep / (rightStep * (leftStep + rightStep))
+            result[index] = (leftWeight * values[index - 1]) + (centerWeight * values[index]) + (rightWeight * values[index + 1])
         }
         return result
     }

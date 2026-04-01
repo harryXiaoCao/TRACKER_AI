@@ -222,8 +222,9 @@ struct NativeMultiObjectTrackingRunner {
             displayTracks[object.trackID] = displayTrack
             analysisTracks[object.trackID] = analysisTrack
             analysesByTrackID[object.trackID] = scientificProcessor.process(
-                rows: rawAnalysisRows(for: analysisTrack, calibrationProfile: calibrationProfile),
-                session: session
+                observations: analysisTrack.observations,
+                calibration: calibrationProfile,
+                config: session.analysisConfig
             )
         }
 
@@ -277,43 +278,6 @@ struct NativeMultiObjectTrackingRunner {
         return objects
     }
 
-    private func rawAnalysisRows(
-        for track: NativeTrackResult,
-        calibrationProfile: CalibrationProfile
-    ) -> [AnalysisRow] {
-        track.observations.map { observation in
-            let transformed = calibrationProfile.transformPoint(
-                xPx: observation.centroidXPixels,
-                yPx: observation.centroidYPixels
-            )
-            return AnalysisRow(
-                frameIndex: observation.frameIndex,
-                timeSeconds: observation.timeSeconds,
-                xUnits: transformed.0,
-                yUnits: transformed.1,
-                speed: 0,
-                accelerationMagnitude: 0,
-                trackerConfidence: observation.confidence,
-                scientificConfidence: observation.confidence,
-                xPixels: observation.centroidXPixels,
-                yPixels: observation.centroidYPixels,
-                rawXUnits: transformed.0,
-                rawYUnits: transformed.1,
-                xVelocity: nil,
-                yVelocity: nil,
-                xAcceleration: nil,
-                yAcceleration: nil,
-                angleDegrees: nil,
-                positionUncertainty: nil,
-                velocityUncertainty: nil,
-                accelerationUncertainty: nil,
-                lost: observation.lost,
-                corrected: observation.corrected,
-                state: observation.state,
-                failureReason: observation.failureReason ?? ""
-            )
-        }
-    }
 }
 
 struct NativeTrackingParityTarget: Hashable {

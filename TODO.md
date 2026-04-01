@@ -168,10 +168,11 @@ The goal of the next migration phase should be to eliminate `PythonEngineBridge.
 
 ### 12. Port kinematic analysis as a primary native pipeline stage
 
-- [ ] Promote `NativeScientificProcessor` into the authoritative runtime analysis stage.
-- [ ] Confirm parity for smoothing, velocities, accelerations, uncertainties, and angle calculations.
-- [ ] Match Python handling of very short clips and edge-of-window smoothing cases.
-- [ ] Add fixture comparisons between Python `AnalysisResult` rows and Swift `AnalysisRow` outputs.
+- [x] Promote `NativeScientificProcessor` into the authoritative runtime analysis stage.
+- [x] Confirm parity for smoothing, velocities, accelerations, uncertainties, and angle calculations.
+- [x] Match Python handling of very short clips and edge-of-window smoothing cases.
+- [x] Add fixture comparisons between Python `AnalysisResult` rows and Swift `AnalysisRow` outputs.
+  Native kinematic processing now runs directly from `NativeTrackingObservation` output inside `NativeMultiObjectTrackingRunner`, gradient/smoothing behavior was tightened to match Python edge cases, and fixture-backed Swift tests now compare native rows against Python-generated analysis rows for short clips, penalty-bearing tracks, and smoothing-window corner cases.
 
 ### 13. Port derived event generation and selected-window analysis
 
