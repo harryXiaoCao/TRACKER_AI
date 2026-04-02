@@ -212,7 +212,8 @@ struct AdditionalObjectDraft: Identifiable, Hashable, Codable {
 }
 
 struct CorrectionRecord: Identifiable, Hashable, Codable {
-    var id: String { "\(frameIndex)-\(note)" }
+    var id: String { "\(trackID)-\(frameIndex)-\(note)" }
+    var trackID: String = "primary"
     var frameIndex: Int
     var note: String
     var bbox: BoundingBoxDraft
@@ -578,9 +579,44 @@ struct ExperimentMetadataSnapshot: Codable {
 }
 
 struct CorrectionSnapshot: Codable {
+    var trackID: String?
     var frameIndex: Int
     var bbox: BBoxSnapshot
     var note: String?
+
+    enum CodingKeys: String, CodingKey {
+        case trackID = "track_id"
+        case frameIndex = "frame_index"
+        case bbox
+        case note
+    }
+
+    enum LegacyCodingKeys: String, CodingKey {
+        case trackID
+        case frameIndex
+        case bbox
+        case note
+    }
+
+    init(trackID: String?, frameIndex: Int, bbox: BBoxSnapshot, note: String?) {
+        self.trackID = trackID
+        self.frameIndex = frameIndex
+        self.bbox = bbox
+        self.note = note
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
+        trackID = try container.decodeIfPresent(String.self, forKey: .trackID)
+            ?? legacy.decodeIfPresent(String.self, forKey: .trackID)
+        frameIndex = try container.decodeIfPresent(Int.self, forKey: .frameIndex)
+            ?? legacy.decode(Int.self, forKey: .frameIndex)
+        bbox = try container.decodeIfPresent(BBoxSnapshot.self, forKey: .bbox)
+            ?? legacy.decode(BBoxSnapshot.self, forKey: .bbox)
+        note = try container.decodeIfPresent(String.self, forKey: .note)
+            ?? legacy.decodeIfPresent(String.self, forKey: .note)
+    }
 }
 
 struct ReviewStateSnapshot: Codable {

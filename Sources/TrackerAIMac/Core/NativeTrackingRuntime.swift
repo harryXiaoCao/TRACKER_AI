@@ -311,6 +311,93 @@ enum NativeTrackingParityTargets {
 }
 
 struct NativeSingleObjectTrackingRunner {
+    func replayCorrection(
+        video: NativeVideoSource,
+        baseTrack: NativeTrackResult,
+        correctedBBox: BBoxSnapshot,
+        startFrame: Int,
+        endFrame: Int? = nil,
+        config: TrackingConfigSnapshot = .pythonDefaults,
+        trackID: String = "primary",
+        trackName: String = "Primary Object",
+        trackKind: String = "primary"
+    ) throws -> NativeTrackResult {
+        let replacement = try runSingleObjectTracking(
+            video: video,
+            initialBBox: correctedBBox,
+            startFrame: startFrame,
+            endFrame: endFrame,
+            corrected: true,
+            config: config,
+            trackID: trackID,
+            trackName: trackName,
+            trackKind: trackKind
+        )
+        return mergeTrackResults(base: baseTrack, replacement: replacement)
+    }
+
+    func replayCorrection(
+        frameImages: [CGImage],
+        baseTrack: NativeTrackResult,
+        correctedBBox: BBoxSnapshot,
+        startFrame: Int,
+        config: TrackingConfigSnapshot = .pythonDefaults,
+        fps: Double = 30.0,
+        trackID: String = "primary",
+        trackName: String = "Primary Object",
+        trackKind: String = "primary"
+    ) throws -> NativeTrackResult {
+        guard startFrame >= 0, startFrame < frameImages.count else {
+            throw NativeTrackingRuntimeError.invalidFrameRange(start: startFrame, end: frameImages.count - 1)
+        }
+
+        let replacementFrames = Array(frameImages[startFrame...])
+        let replacement = try runSingleObjectTracking(
+            frameImages: replacementFrames,
+            initialBBox: correctedBBox,
+            corrected: true,
+            config: config,
+            fps: fps,
+            trackID: trackID,
+            trackName: trackName,
+            trackKind: trackKind
+        )
+        let rebasedReplacement = NativeTrackResult(
+            observations: replacement.observations.map { observation in
+                NativeTrackingObservation(
+                    frameIndex: observation.frameIndex + startFrame,
+                    timeSeconds: observation.timeSeconds + (Double(startFrame) / max(fps, 1.0)),
+                    centroidXPixels: observation.centroidXPixels,
+                    centroidYPixels: observation.centroidYPixels,
+                    bbox: observation.bbox,
+                    confidence: observation.confidence,
+                    lost: observation.lost,
+                    corrected: observation.corrected,
+                    state: observation.state,
+                    failureReason: observation.failureReason,
+                    source: observation.source,
+                    isInferred: observation.isInferred,
+                    isInterpolated: observation.isInterpolated,
+                    debug: observation.debug,
+                    trackID: observation.trackID,
+                    trackName: observation.trackName,
+                    trackKind: observation.trackKind
+                )
+            },
+            trackerName: replacement.trackerName,
+            averageConfidence: replacement.averageConfidence,
+            startFrame: startFrame,
+            endFrame: replacement.endFrame + startFrame,
+            initialBBox: replacement.initialBBox,
+            quality: replacement.quality,
+            trackingConfig: replacement.trackingConfig,
+            trackID: replacement.trackID,
+            trackName: replacement.trackName,
+            trackKind: replacement.trackKind
+        )
+        return mergeTrackResults(base: baseTrack, replacement: rebasedReplacement)
+    }
+
     func runReferenceCorrectedTracking(
         video: NativeVideoSource,
         initialBBox: BBoxSnapshot,
@@ -847,6 +934,53 @@ struct NativeSingleObjectTrackingRunner {
 
     private func roundedReferenceDebugValue(_ value: Double) -> String {
         String((value * 10_000).rounded() / 10_000)
+    }
+
+    func mergeTrackResults(
+        base: NativeTrackResult,
+        replacement: NativeTrackResult
+    ) -> NativeTrackResult {
+        var merged = base.observations.filter { $0.frameIndex < replacement.startFrame }
+        merged.append(contentsOf: replacement.observations)
+        merged.sort { $0.frameIndex < $1.frameIndex }
+
+        let averageConfidence = merged.isEmpty ? 0 : merged.map(\.confidence).mean()
+        let derivedQuality = NativeTrackRuntimeDerivation.computeQualityMetadata(observations: merged)
+        let correctedSpan = TrackSpanSnapshot(
+            startFrame: replacement.startFrame,
+            endFrame: replacement.observations.last?.frameIndex ?? replacement.startFrame,
+            reason: "manual_correction"
+        )
+        let correctedSpans = ((base.quality.correctedSpans ?? []) + [correctedSpan])
+            .sorted { lhs, rhs in
+                if lhs.startFrame == rhs.startFrame {
+                    if lhs.endFrame == rhs.endFrame {
+                        return lhs.reason < rhs.reason
+                    }
+                    return lhs.endFrame < rhs.endFrame
+                }
+                return lhs.startFrame < rhs.startFrame
+            }
+
+        return NativeTrackResult(
+            observations: merged,
+            trackerName: base.trackerName,
+            averageConfidence: averageConfidence,
+            startFrame: base.startFrame,
+            endFrame: max(base.endFrame, replacement.endFrame),
+            initialBBox: base.initialBBox,
+            quality: TrackQualitySnapshot(
+                lostSpans: derivedQuality.lostSpans,
+                suspectSpans: derivedQuality.suspectSpans,
+                correctedSpans: correctedSpans,
+                reacquisitionCount: derivedQuality.reacquisitionCount,
+                reviewRecommended: derivedQuality.reviewRecommended
+            ),
+            trackingConfig: replacement.trackingConfig,
+            trackID: base.trackID,
+            trackName: base.trackName,
+            trackKind: base.trackKind
+        )
     }
 }
 

@@ -201,11 +201,12 @@ The goal of the next migration phase should be to eliminate `PythonEngineBridge.
 
 ### 16. Port correction replay as a native rerun workflow
 
-- [ ] Recreate the Python `apply_correction` workflow natively.
-- [ ] Support rerunning from the correction frame forward using the corrected bbox as the new seed.
-- [ ] Preserve correction anchors in session state and QC spans.
-- [ ] Make correction replay work for primary and, later, companion objects.
-- [ ] Add tests proving corrected reruns actually improve or change downstream observations.
+- [x] Recreate the Python `apply_correction` workflow natively.
+- [x] Support rerunning from the correction frame forward using the corrected bbox as the new seed.
+- [x] Preserve correction anchors in session state and QC spans.
+- [x] Make correction replay work for primary and, later, companion objects.
+- [x] Add tests proving corrected reruns actually improve or change downstream observations.
+  Native correction replay now lives in `AppModel.applyCorrectionReplay(...)` and `NativeSingleObjectTrackingRunner.replayCorrection(...)`, stores track-aware correction anchors in session JSON, replays the selected track from the correction frame forward before rebuilding native QC/pairwise/report state, and is covered by focused Swift regression tests for downstream observation replacement plus coordinator export smoke coverage.
 
 ### 17. Close the remaining setup/review parity gaps from the Qt app
 

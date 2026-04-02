@@ -158,6 +158,59 @@ final class NativeTrackingRuntimeTests: XCTestCase {
         XCTAssertEqual(quality.reviewRecommended, true)
     }
 
+    func testCorrectionReplayRerunsForwardFromAnchorAndReplacesDownstreamObservations() throws {
+        let runner = NativeSingleObjectTrackingRunner()
+        let config = syntheticRecoveryConfig()
+        let initialBBox = BBoxSnapshot(x: 8, y: 20, width: 14, height: 14)
+        let correctionBBox = BBoxSnapshot(x: 54, y: 20, width: 14, height: 14)
+        let frames = [
+            makeSyntheticFrame(objectRect: CGRect(x: 8, y: 20, width: 14, height: 14)),
+            makeSyntheticFrame(objectRect: CGRect(x: 14, y: 20, width: 14, height: 14)),
+            makeSyntheticFrame(objectRect: CGRect(x: 20, y: 20, width: 14, height: 14)),
+            makeSyntheticFrame(objectRect: CGRect(x: 54, y: 20, width: 14, height: 14)),
+            makeSyntheticFrame(objectRect: CGRect(x: 60, y: 20, width: 14, height: 14)),
+        ]
+        let baseObservations = [
+            makeObservation(frameIndex: 0, x: 15, confidence: 1.0, lost: false, state: NativeTrackingState.tracking.rawValue),
+            makeObservation(frameIndex: 1, x: 21, confidence: 0.92, lost: false, state: NativeTrackingState.tracking.rawValue),
+            makeObservation(frameIndex: 2, x: 27, confidence: 0.91, lost: false, state: NativeTrackingState.tracking.rawValue),
+            makeObservation(frameIndex: 3, x: 33, confidence: 0.28, lost: true, state: NativeTrackingState.lost.rawValue),
+            makeObservation(frameIndex: 4, x: 39, confidence: 0.24, lost: true, state: NativeTrackingState.lost.rawValue),
+        ]
+        let baseTrack = NativeTrackResult(
+            observations: baseObservations,
+            trackerName: "robust_hybrid_tracker",
+            averageConfidence: baseObservations.map(\.confidence).reduce(0, +) / Double(baseObservations.count),
+            startFrame: 0,
+            endFrame: 4,
+            initialBBox: initialBBox,
+            quality: NativeTrackRuntimeDerivation.computeQualityMetadata(observations: baseObservations),
+            trackingConfig: config,
+            trackID: "primary",
+            trackName: "Primary Object",
+            trackKind: "primary"
+        )
+
+        let replayed = try runner.replayCorrection(
+            frameImages: frames,
+            baseTrack: baseTrack,
+            correctedBBox: correctionBBox,
+            startFrame: 3,
+            config: config,
+            fps: 30.0
+        )
+
+        XCTAssertEqual(replayed.observations.map(\.frameIndex), [0, 1, 2, 3, 4])
+        XCTAssertEqual(replayed.observations.prefix(3).map(\.centroidXPixels), baseObservations.prefix(3).map(\.centroidXPixels))
+        XCTAssertTrue(replayed.observations[3].corrected)
+        XCTAssertTrue(replayed.observations[4].corrected)
+        XCTAssertLessThan(abs(replayed.observations[3].centroidXPixels - 61.0), 1.5)
+        XCTAssertLessThan(abs(replayed.observations[4].centroidXPixels - 67.0), 1.5)
+        XCTAssertGreaterThan(abs(replayed.observations[4].centroidXPixels - baseObservations[4].centroidXPixels), 20.0)
+        XCTAssertEqual(replayed.quality.correctedSpans?.map(\.startFrame), [3])
+        XCTAssertEqual(replayed.quality.correctedSpans?.map(\.endFrame), [4])
+    }
+
     func testReferenceMotionCorrectionMatchesPythonSemantics() {
         let runner = NativeSingleObjectTrackingRunner()
         let primaryTrack = NativeTrackResult(

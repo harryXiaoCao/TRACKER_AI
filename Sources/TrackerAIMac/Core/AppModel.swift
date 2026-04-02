@@ -129,6 +129,7 @@ final class AppModel {
     private let nativeExporter = NativeResearchBundleExporter()
     private let nativeScientificProcessor = NativeScientificProcessor()
     private let nativeTrackingPipeline = NativeTrackingPipeline()
+    private let nativeTrackingRunner = NativeSingleObjectTrackingRunner()
     private let nativeScientificReporter = NativeResearchReporter()
     private let analysisCoordinator = NativeAnalysisCoordinator()
     private var currentVideoSource: NativeVideoSource?
@@ -478,9 +479,9 @@ final class AppModel {
         if let existing {
             currentFrame = existing.frameIndex
             seekPlayer()
-            selectionMessage = "Redraw the correction anchor for frame \(existing.frameIndex) directly on the video."
+            selectionMessage = "Redraw the correction anchor for \(trackDisplayName(for: existing.trackID)) at frame \(existing.frameIndex) directly on the video."
         } else {
-            selectionMessage = "Draw a correction box at the current frame."
+            selectionMessage = "Draw a correction box for \(activeTrackLabel) at the current frame."
         }
     }
 
@@ -570,6 +571,7 @@ final class AppModel {
 
     func applyDrawnCorrection(_ rect: CGRect) {
         let record = CorrectionRecord(
+            trackID: editingCorrectionID.flatMap { existingCorrection(id: $0)?.trackID } ?? activeTrackID,
             frameIndex: currentFrame,
             note: "manual_correction",
             bbox: Self.boundingBoxDraft(from: rect)
@@ -588,7 +590,7 @@ final class AppModel {
         annotationMode = .idle
         editingCorrectionID = nil
         refreshReviewQueue(trackQuality: sessionTrackQuality)
-        selectionMessage = "Correction anchor stored locally in the native review workflow."
+        selectionMessage = "Correction anchor stored for \(trackDisplayName(for: record.trackID)) in the native review workflow."
     }
 
     func applyDrawnAdditionalObject(_ rect: CGRect) {
@@ -687,6 +689,10 @@ final class AppModel {
             return object.name
         }
         return trackID.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+
+    private func existingCorrection(id: String) -> CorrectionRecord? {
+        corrections.first(where: { $0.id == id })
     }
 
     func jumpToReviewIssue(_ issue: ReviewIssue) {
@@ -853,7 +859,7 @@ final class AppModel {
             issues.append(
                 ReviewIssue(
                     title: "Correction Anchor",
-                    detail: correction.note,
+                    detail: "\(trackDisplayName(for: correction.trackID)) • \(correction.note)",
                     frameIndex: correction.frameIndex,
                     endFrame: correction.frameIndex,
                     severity: "resolved",
@@ -886,6 +892,193 @@ final class AppModel {
         manualEvents.removeAll { $0.id == event.id }
         refreshReviewQueue(trackQuality: sessionTrackQuality)
         statusMessage = "Removed event \(event.name)"
+    }
+
+    func applyCorrectionReplay(for correction: CorrectionRecord? = nil) async {
+        guard let videoURL = currentVideoURL else {
+            statusMessage = "Load a video before replaying a correction."
+            return
+        }
+        guard let currentVideoSource else {
+            statusMessage = "The native video source is still loading. Try replaying the correction again in a moment."
+            return
+        }
+        guard !trackBundles.isEmpty else {
+            statusMessage = "Run or load an analysis before replaying a correction."
+            return
+        }
+
+        let targetCorrection: CorrectionRecord?
+        if let correction {
+            targetCorrection = correction
+        } else {
+            targetCorrection = corrections.first(where: { $0.trackID == activeTrackID && $0.frameIndex == currentFrame })
+                ?? corrections.last(where: { $0.trackID == activeTrackID && $0.frameIndex <= currentFrame })
+        }
+        guard let targetCorrection else {
+            statusMessage = "No stored correction anchor was found for \(activeTrackLabel) at or before frame \(currentFrame)."
+            return
+        }
+        guard let bundle = trackBundles.first(where: { $0.trackID == targetCorrection.trackID }) else {
+            statusMessage = "The current results do not contain a track for \(trackDisplayName(for: targetCorrection.trackID))."
+            return
+        }
+
+        let baseSession: SessionSnapshot
+        do {
+            baseSession = try buildSessionSnapshot(videoURL: videoURL)
+        } catch {
+            statusMessage = error.localizedDescription
+            return
+        }
+        guard let baseTrack = nativeTrackingPipeline.reconstructTrack(bundle: bundle, session: baseSession) else {
+            statusMessage = "Unable to reconstruct the selected track for correction replay."
+            return
+        }
+
+        let correctedBBox = BBoxSnapshot(
+            x: Double(targetCorrection.bbox.x) ?? 0,
+            y: Double(targetCorrection.bbox.y) ?? 0,
+            width: Double(targetCorrection.bbox.width) ?? 0,
+            height: Double(targetCorrection.bbox.height) ?? 0
+        )
+
+        engineState = .running
+        analysisProgressFraction = 0.7
+        statusMessage = "Replaying correction for \(trackDisplayName(for: targetCorrection.trackID)) from frame \(targetCorrection.frameIndex)..."
+
+        do {
+            let replayBaseTrack: NativeTrackResult
+            if baseSession.referenceBbox != nil {
+                let replayStartFrame = baseSession.selectedStartFrame ?? 0
+                if targetCorrection.frameIndex > replayStartFrame {
+                    replayBaseTrack = try nativeTrackingRunner.runSingleObjectTracking(
+                        video: currentVideoSource,
+                        initialBBox: correctedBBoxForTrack(trackID: targetCorrection.trackID, session: baseSession),
+                        startFrame: replayStartFrame,
+                        endFrame: targetCorrection.frameIndex - 1,
+                        corrected: false,
+                        config: baseSession.resolvedTrackingConfig,
+                        trackID: bundle.trackID,
+                        trackName: bundle.trackName,
+                        trackKind: bundle.trackKind
+                    )
+                } else {
+                    replayBaseTrack = NativeTrackResult(
+                        observations: [],
+                        trackerName: "robust_hybrid_tracker",
+                        averageConfidence: 0,
+                        startFrame: replayStartFrame,
+                        endFrame: replayStartFrame,
+                        initialBBox: correctedBBoxForTrack(trackID: targetCorrection.trackID, session: baseSession),
+                        quality: NativeTrackRuntimeDerivation.emptyQuality(),
+                        trackingConfig: baseSession.resolvedTrackingConfig,
+                        trackID: bundle.trackID,
+                        trackName: bundle.trackName,
+                        trackKind: bundle.trackKind
+                    )
+                }
+            } else {
+                replayBaseTrack = NativeTrackResult(
+                    observations: baseTrack.observations,
+                    trackerName: "robust_hybrid_tracker",
+                    averageConfidence: baseTrack.averageConfidence,
+                    startFrame: baseTrack.observations.first?.frameIndex ?? targetCorrection.frameIndex,
+                    endFrame: baseTrack.observations.last?.frameIndex ?? targetCorrection.frameIndex,
+                    initialBBox: correctedBBoxForTrack(trackID: targetCorrection.trackID, session: baseSession),
+                    quality: baseTrack.quality,
+                    trackingConfig: baseSession.resolvedTrackingConfig,
+                    trackID: baseTrack.trackID,
+                    trackName: baseTrack.trackName,
+                    trackKind: baseTrack.trackKind
+                )
+            }
+
+            let mergedDisplayTrack = try nativeTrackingRunner.replayCorrection(
+                video: currentVideoSource,
+                baseTrack: replayBaseTrack,
+                correctedBBox: correctedBBox,
+                startFrame: targetCorrection.frameIndex,
+                endFrame: baseSession.selectedEndFrame,
+                config: baseSession.resolvedTrackingConfig,
+                trackID: baseTrack.trackID,
+                trackName: baseTrack.trackName,
+                trackKind: baseTrack.trackKind
+            )
+
+            let resolvedTrack: NativeTrackResult
+            if let referenceBBox = baseSession.referenceBbox {
+                let referenceTrack = try nativeTrackingRunner.runSingleObjectTracking(
+                    video: currentVideoSource,
+                    initialBBox: referenceBBox,
+                    startFrame: baseSession.selectedStartFrame ?? 0,
+                    endFrame: baseSession.selectedEndFrame,
+                    corrected: false,
+                    config: nativeTrackingRunner.referenceTrackingConfig(from: baseSession.resolvedTrackingConfig),
+                    trackID: "reference",
+                    trackName: "Reference Marker",
+                    trackKind: "reference"
+                )
+                resolvedTrack = nativeTrackingRunner.applyReferenceMotionCorrection(
+                    primaryTrack: mergedDisplayTrack,
+                    referenceTrack: referenceTrack
+                )
+            } else {
+                resolvedTrack = mergedDisplayTrack
+            }
+
+            let rebuiltRows = nativeScientificProcessor.process(
+                observations: resolvedTrack.observations,
+                calibration: try baseSession.calibration.makeCalibrationProfile(),
+                config: baseSession.analysisConfig
+            )
+
+            let rebuiltBundles = trackBundles.map { existingBundle in
+                guard existingBundle.trackID == targetCorrection.trackID else { return existingBundle }
+                return rebuiltTrackBundle(
+                    trackID: existingBundle.trackID,
+                    trackName: existingBundle.trackName,
+                    trackKind: existingBundle.trackKind,
+                    processedRows: rebuiltRows,
+                    reportMarkdown: existingBundle.reportMarkdown,
+                    exportDirectory: existingBundle.exportDirectory,
+                    session: baseSession,
+                    pairwiseMetrics: pairwiseMetrics,
+                    reproduceCommand: nativeReproduceCommand(for: baseSession, outputDirectory: exportDirectory ?? existingBundle.exportDirectory),
+                    manualEventCount: existingBundle.trackID == "primary"
+                        ? (baseSession.eventMarkers ?? []).filter { ($0.origin ?? "manual") == "manual" }.count
+                        : 0
+                )
+            }
+
+            let updatedLoadResult = AnalysisLoadResult(
+                summary: rebuiltBundles.first(where: { $0.trackID == "primary" })?.summary,
+                quality: rebuiltBundles.first(where: { $0.trackID == "primary" })?.quality,
+                modules: rebuiltBundles.first(where: { $0.trackID == "primary" })?.modules ?? [],
+                analysisRows: rebuiltBundles.first(where: { $0.trackID == "primary" })?.analysisRows ?? rebuiltRows,
+                session: baseSession,
+                reportMarkdown: rebuiltBundles.first(where: { $0.trackID == "primary" })?.reportMarkdown ?? "",
+                exportDirectory: exportDirectory ?? nativeBundleDirectory ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
+                trackBundles: rebuiltBundles,
+                pairwiseMetrics: []
+            )
+            let previousActiveTrackID = activeTrackID
+            apply(loadResult: updatedLoadResult)
+            activeTrackID = trackBundles.contains(where: { $0.trackID == previousActiveTrackID }) ? previousActiveTrackID : targetCorrection.trackID
+            if let activeTrackBundle {
+                hydrateResults(from: activeTrackBundle)
+            }
+            currentFrame = targetCorrection.frameIndex
+            seekPlayer()
+            analysisProgressFraction = 1
+            engineState = .ready
+            statusMessage = "Correction replay updated \(trackDisplayName(for: targetCorrection.trackID)) from frame \(targetCorrection.frameIndex)."
+            selectedTab = .review
+        } catch {
+            analysisProgressFraction = 0
+            engineState = .unavailable
+            statusMessage = error.localizedDescription
+        }
     }
 
     func runAnalysis() async {
@@ -1071,6 +1264,7 @@ final class AppModel {
 
         corrections = (session.corrections ?? []).map {
             CorrectionRecord(
+                trackID: $0.trackID ?? "primary",
                 frameIndex: $0.frameIndex,
                 note: $0.note ?? "manual_correction",
                 bbox: BoundingBoxDraft(
@@ -1563,6 +1757,7 @@ final class AppModel {
             referenceBbox: reference,
             corrections: corrections.map {
                 CorrectionSnapshot(
+                    trackID: $0.trackID,
                     frameIndex: $0.frameIndex,
                     bbox: BBoxSnapshot(
                         x: Double($0.bbox.x) ?? 0,
@@ -1946,6 +2141,19 @@ final class AppModel {
             return try? baseSessionSnapshot(videoURL: currentVideoURL, trackQuality: nil)
         }
         return nil
+    }
+
+    private func correctedBBoxForTrack(trackID: String, session: SessionSnapshot) -> BBoxSnapshot {
+        if trackID == "primary" {
+            return session.initialBbox
+        }
+        if trackID == "reference", let referenceBBox = session.referenceBbox {
+            return referenceBBox
+        }
+        if let objectBBox = session.additionalObjects?.first(where: { $0.trackID == trackID })?.bbox {
+            return objectBBox
+        }
+        return session.initialBbox
     }
 
     private func mergedPrimaryTrackQuality(

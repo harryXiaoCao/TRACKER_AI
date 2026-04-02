@@ -64,6 +64,8 @@ struct ReviewJournalView: View {
                         HStack(spacing: 10) {
                             Button("Draw Correction On Video", action: drawCorrection)
                                 .buttonStyle(PrimaryActionButtonStyle())
+                            Button("Replay Current Track", action: replayCurrentCorrection)
+                                .buttonStyle(GhostActionButtonStyle())
                             Button("Cancel Drawing", action: cancelDrawing)
                                 .buttonStyle(GhostActionButtonStyle())
                         }
@@ -77,12 +79,17 @@ struct ReviewJournalView: View {
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text("Frame \(correction.frameIndex)")
                                             .font(.system(size: 14, weight: .semibold))
-                                        Text("\(correction.note) • \(correction.bbox.x), \(correction.bbox.y), \(correction.bbox.width), \(correction.bbox.height)")
+                                        Text("\(model.trackDisplayName(for: correction.trackID)) • \(correction.note)")
+                                            .font(.system(size: 12))
+                                            .foregroundStyle(TrackerTheme.muted)
+                                        Text("\(correction.bbox.x), \(correction.bbox.y), \(correction.bbox.width), \(correction.bbox.height)")
                                             .font(.system(size: 12))
                                             .foregroundStyle(TrackerTheme.muted)
                                     }
                                     Spacer()
                                     HStack(spacing: 8) {
+                                        Button("Replay", action: { replay(correction) })
+                                            .buttonStyle(GhostActionButtonStyle())
                                         Button("Edit", action: { model.startCorrectionDrawing(existing: correction) })
                                             .buttonStyle(GhostActionButtonStyle())
                                         Button("Remove", action: { model.removeCorrection(correction) })
@@ -185,6 +192,18 @@ struct ReviewJournalView: View {
 
     private func cancelDrawing() {
         model.cancelAnnotation()
+    }
+
+    private func replayCurrentCorrection() {
+        Task {
+            await model.applyCorrectionReplay()
+        }
+    }
+
+    private func replay(_ correction: CorrectionRecord) {
+        Task {
+            await model.applyCorrectionReplay(for: correction)
+        }
     }
 
     private func markWindowStart() {
