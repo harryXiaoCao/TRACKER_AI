@@ -12,6 +12,7 @@ final class AppModel {
     var engineState: EngineState = .ready
     var statusMessage = "Native shell ready. Import a video or load a Python session to begin."
     var selectionMessage = "Choose a preset, then calibrate and define the target box."
+    var analysisProgressFraction = 0.0
 
     var presets = ResearchPreset.all
     var selectedPresetID = ResearchPreset.all.first?.id ?? "general"
@@ -128,11 +129,12 @@ final class AppModel {
     private let nativeExporter = NativeResearchBundleExporter()
     private let nativeScientificProcessor = NativeScientificProcessor()
     private let nativeTrackingPipeline = NativeTrackingPipeline()
-    private let nativeMultiObjectTrackingRunner = NativeMultiObjectTrackingRunner()
     private let nativeScientificReporter = NativeResearchReporter()
+    private let analysisCoordinator = NativeAnalysisCoordinator()
     private var currentVideoSource: NativeVideoSource?
     private var pendingVideoLoadID = UUID()
     private var internalTrackingConfig = TrackingConfigSnapshot.pythonDefaults
+    @ObservationIgnored private var analysisRunTask: Task<AnalysisLoadResult, Error>?
 
     init() {
         bootstrapWorkspace()
@@ -171,6 +173,7 @@ final class AppModel {
         return "Optional"
     }
     var canRunAnalysis: Bool { currentVideoURL != nil && isTargetReady && isScaleReady && calibrationValidationMessage == nil }
+    var canCancelAnalysis: Bool { analysisRunTask != nil && engineState == .running }
     var maxFrame: Double { Double(max(endFrame, startFrame + 1)) }
     var allEvents: [EventMarkerRecord] { nativeScientificReporter.mergeEventMarkers(manualEvents, withDerived: derivedEvents) }
     var activeTrackBundle: AnalysisTrackBundle? {
@@ -380,11 +383,13 @@ final class AppModel {
                 let trialName = sanitizedTrialName(for: entry.session, fallbackIndex: index + 1)
                 let outputDirectory = outputRoot.appendingPathComponent(trialName, isDirectory: true)
                 let config = try runConfiguration(from: entry.session, outputDirectory: outputDirectory)
-                let rawResult = try await runNativeAnalysis(config: config, preservedSession: entry.session)
+                let rawResult = try await analysisCoordinator.run(
+                    config: config,
+                    preservedSession: entry.session
+                )
                 let mergedResult = postProcess(loadResult: rawResult, sessionOverride: entry.session)
                 let mergedSession = mergedResult.session ?? entry.session
 
-                try syncNativeResearchBundle(result: mergedResult, session: mergedSession)
                 let trial = nativeExporter.buildBatchTrialReport(
                     trialID: trialName,
                     videoPath: mergedSession.videoPath,
@@ -410,9 +415,11 @@ final class AppModel {
             exportDirectory = outputRoot
             selectedTab = .results
             selectedResultsTab = .reproduce
+            analysisProgressFraction = 1
             engineState = .ready
             statusMessage = "Native workspace batch finished for \(aggregate.trialCount) trial(s)."
         } catch {
+            analysisProgressFraction = 0
             engineState = .unavailable
             statusMessage = error.localizedDescription
         }
@@ -891,8 +898,10 @@ final class AppModel {
             return
         }
         guard let directory = FilePanels.chooseDirectory(title: "Choose Analysis Export Directory") else { return }
+        analysisRunTask?.cancel()
+        analysisProgressFraction = 0
         engineState = .running
-        statusMessage = "Running native analysis engine..."
+        statusMessage = "Preparing native analysis bundle..."
 
         let preservedSession: SessionSnapshot
         do {
@@ -929,19 +938,45 @@ final class AppModel {
             additionalObjects: additionalObjects
         )
 
+        let task = Task<AnalysisLoadResult, Error> {
+            try await analysisCoordinator.run(
+                config: config,
+                preservedSession: preservedSession
+            ) { [self] stage in
+                await MainActor.run {
+                    analysisProgressFraction = stage.progressFraction
+                    statusMessage = stage.statusMessage
+                }
+            }
+        }
+        analysisRunTask = task
+
         do {
-            let result = try await runNativeAnalysis(config: config, preservedSession: preservedSession)
+            let result = try await task.value
             let mergedResult = postProcess(loadResult: result, sessionOverride: preservedSession)
             apply(loadResult: mergedResult)
-            try syncNativeResearchBundle(result: mergedResult, session: mergedResult.session ?? preservedSession)
-            statusMessage = "Analysis complete. Native multi-object tracking is now driving the research bundle."
+            nativeBundleDirectory = mergedResult.exportDirectory
+            analysisProgressFraction = 1
+            statusMessage = "Analysis complete. The native run coordinator is now driving the research bundle."
             selectedTab = .results
             selectedResultsTab = .insights
             engineState = .ready
+        } catch is CancellationError {
+            analysisProgressFraction = 0
+            engineState = .ready
+            statusMessage = "Analysis canceled before the native bundle finished exporting."
         } catch {
+            analysisProgressFraction = 0
             engineState = .unavailable
             statusMessage = error.localizedDescription
         }
+        analysisRunTask = nil
+    }
+
+    func cancelAnalysis() {
+        guard let analysisRunTask else { return }
+        analysisRunTask.cancel()
+        statusMessage = "Canceling native analysis..."
     }
 
     func apply(session: SessionSnapshot, sessionURL: URL, loadBundle: Bool) {
@@ -1242,7 +1277,7 @@ final class AppModel {
                     reviewRecommended: false,
                     notes: [
                     "Use the review journal to mark release, apex, and impact frames before publication exports.",
-                    "A commercialization-ready native shell is now in place; the Python engine remains the temporary analysis backend.",
+                    "A commercialization-ready native shell is now in place, and the native run coordinator now owns export-time analysis.",
                     ]
                 ),
                 modules: [
@@ -2238,87 +2273,6 @@ final class AppModel {
             trackQuality: generated.trackQuality ?? preserved.trackQuality,
             exportPreferences: preserved.exportPreferences ?? generated.exportPreferences
         )
-    }
-
-    private func runNativeAnalysis(
-        config: NativeRunConfiguration,
-        preservedSession: SessionSnapshot
-    ) async throws -> AnalysisLoadResult {
-        let videoSource = try await NativeVideoSource.open(url: config.videoURL)
-        let experiment = try nativeMultiObjectTrackingRunner.run(
-            video: videoSource,
-            session: preservedSession
-        )
-        return experiment.asLoadResult(
-            session: preservedSession,
-            outputDirectory: config.outputDirectory
-        )
-    }
-
-    private func syncNativeResearchBundle(result: AnalysisLoadResult, session: SessionSnapshot) throws {
-        let bundles = result.trackBundles.isEmpty
-            ? [
-                AnalysisTrackBundle(
-                    trackID: "primary",
-                    trackName: "Primary Object",
-                    trackKind: "primary",
-                    summary: result.summary,
-                    quality: result.quality,
-                    modules: result.modules,
-                    analysisRows: result.analysisRows,
-                    reportMarkdown: result.reportMarkdown,
-                    exportDirectory: result.exportDirectory
-                )
-            ]
-            : result.trackBundles
-
-        try FileManager.default.createDirectory(at: result.exportDirectory, withIntermediateDirectories: true)
-        try engine.saveSession(
-            session,
-            to: result.exportDirectory.appendingPathComponent("session.json")
-        )
-
-        for bundle in bundles {
-            let payload = NativeResearchBundlePayload(
-                session: session,
-                trackID: bundle.trackID,
-                trackName: bundle.trackName,
-                analysisRows: bundle.analysisRows,
-                pairwiseMetrics: result.pairwiseMetrics,
-                eventMarkers: bundle.trackID == "primary" ? eventMarkers(from: session) : [],
-                outputDirectory: bundle.exportDirectory,
-                reportTemplate: session.exportPreferences?.reportTemplate ?? reportTemplate,
-                trackingProfile: session.resolvedTrackingConfig.profile ?? trackingProfile,
-                includeOverlay: session.exportPreferences?.includeOverlay ?? includeOverlay,
-                includePlots: session.exportPreferences?.includePlots ?? includePlots,
-                debugTracking: session.exportPreferences?.includeDebugTracking ?? debugTracking,
-                summary: bundle.summary,
-                quality: bundle.quality,
-                modules: bundle.modules
-            )
-            let outputs = try nativeExporter.export(payload)
-            if bundle.trackID == "primary", let reportURL = outputs["report"] {
-                reportMarkdown = (try? String(contentsOf: reportURL, encoding: .utf8)) ?? reportMarkdown
-            }
-        }
-        try nativeExporter.exportPairwiseMetrics(result.pairwiseMetrics, to: result.exportDirectory)
-    }
-
-    private func eventMarkers(from session: SessionSnapshot) -> [EventMarkerRecord] {
-        (session.eventMarkers ?? []).compactMap {
-            let origin = $0.origin ?? "derived"
-            guard origin == "manual" else { return nil }
-            return EventMarkerRecord(
-                name: $0.name,
-                frameIndex: $0.frameIndex,
-                timeSeconds: $0.timeS,
-                value: $0.value,
-                unitLabel: $0.unitLabel,
-                axis: $0.axis ?? "",
-                note: $0.note ?? "",
-                origin: origin
-            )
-        }
     }
 
     private func applyTrackingConfig(_ snapshot: TrackingConfigSnapshot?) {

@@ -192,10 +192,12 @@ The goal of the next migration phase should be to eliminate `PythonEngineBridge.
 
 ### 15. Replace `PythonEngineBridge.runAnalysis(...)` with a native run coordinator
 
-- [ ] Introduce a Swift-native analysis coordinator that drives the full run from session inputs to result bundle.
-- [ ] Keep `PythonEngineBridge` limited to legacy import support during transition.
-- [ ] Preserve progress reporting, cancellation, and error propagation in `AppModel`.
-- [ ] Add a feature flag if needed so native and Python engines can be compared side-by-side during migration.
+- [x] Introduce a Swift-native analysis coordinator that drives the full run from session inputs to result bundle.
+- [x] Keep `PythonEngineBridge` limited to legacy import support during transition.
+- [x] Preserve progress reporting, cancellation, and error propagation in `AppModel`.
+- [x] Add a feature flag if needed so native and Python engines can be compared side-by-side during migration.
+  A standalone engine toggle was not needed once the native coordinator became the production path; instead, each native export is reloaded through the legacy importer so compatibility can still be checked without keeping Python in the execution loop.
+  Native execution now flows through `Sources/TrackerAIMac/Core/NativeAnalysisCoordinator.swift`, which opens the video, runs native multi-object tracking, exports the research bundle, then reloads that bundle through the legacy importer for compatibility validation; `PythonEngineBridge` no longer owns the production run path, the setup UI now reflects native execution with progress/cancel affordances, and focused Swift coordinator tests plus the Python regression suite cover the migrated boundary.
 
 ### 16. Port correction replay as a native rerun workflow
 

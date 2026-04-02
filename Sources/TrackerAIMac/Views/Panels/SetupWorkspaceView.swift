@@ -195,12 +195,18 @@ struct SetupWorkspaceView: View {
                             }
                         }
                         HStack(spacing: 10) {
-                            Button("Run Native + Python Analysis", action: runAnalysis)
+                            Button("Run Native Analysis", action: runAnalysis)
                                 .buttonStyle(PrimaryActionButtonStyle())
-                                .disabled(!model.canRunAnalysis)
-                            Text("This shell uses the existing Python engine today while the native product layer matures.")
+                                .disabled(!model.canRunAnalysis || model.engineState == .running)
+                            Button("Cancel", action: cancelAnalysis)
+                                .disabled(!model.canCancelAnalysis)
+                            Text("The native run coordinator now owns tracking, bundle export, and legacy bundle reload validation.")
                                 .font(.system(size: 13))
                                 .foregroundStyle(TrackerTheme.muted)
+                        }
+                        if model.engineState == .running {
+                            ProgressView(value: model.analysisProgressFraction)
+                                .progressViewStyle(.linear)
                         }
                     }
                 }
@@ -242,6 +248,10 @@ struct SetupWorkspaceView: View {
 
     private func runAnalysis() {
         Task { await model.runAnalysis() }
+    }
+
+    private func cancelAnalysis() {
+        model.cancelAnalysis()
     }
 }
 
