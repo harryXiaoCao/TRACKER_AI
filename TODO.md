@@ -184,10 +184,11 @@ The goal of the next migration phase should be to eliminate `PythonEngineBridge.
 
 ### 14. Port built-in analyzers and experiment classification fully
 
-- [ ] Confirm every Python analyzer has a Swift-native counterpart or explicit replacement.
-- [ ] Validate projectile, pendulum, rotation, and pairwise/collision logic against known fixtures.
-- [ ] Make experiment classification stable and test-backed, not just UI-friendly.
-- [ ] Document any intentional deviations from Python analyzer outputs.
+- [x] Confirm every Python analyzer has a Swift-native counterpart or explicit replacement.
+- [x] Validate projectile, pendulum, rotation, and pairwise/collision logic against known fixtures.
+- [x] Make experiment classification stable and test-backed, not just UI-friendly.
+- [x] Document any intentional deviations from Python analyzer outputs.
+  Swift now has fixture-backed parity coverage for all six built-in analyzer IDs (`projectile`, `pendulum`, `circular`, `incline`, `spring`, `collision`), and native classification uses an explicit specificity tie-break so rotation-style tracks prefer the `circular` analyzer and pairwise impact tracks prefer `collision` when confidence ties with broader overlap analyzers such as `projectile` or `incline`.
 
 ### 15. Replace `PythonEngineBridge.runAnalysis(...)` with a native run coordinator
 

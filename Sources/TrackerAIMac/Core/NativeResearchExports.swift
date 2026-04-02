@@ -1525,7 +1525,7 @@ struct NativeResearchReporter {
         modules: [AnalyzerSnapshot],
         trackID: String
     ) -> ExperimentClassificationSnapshot {
-        if let strongest = modules.max(by: { $0.confidence < $1.confidence }) {
+        if let strongest = preferredClassificationModule(from: modules) {
             let summary = strongest.notes?.first
                 ?? "Native classification selected \(strongest.title.lowercased()) as the best explanation for this track."
             return ExperimentClassificationSnapshot(
@@ -1546,6 +1546,39 @@ struct NativeResearchReporter {
             summary: "No specialized native analyzer dominated this track, so the classification falls back to a general motion assessment.",
             supportingAnalyzerIDs: modules.map(\.analyzerID)
         )
+    }
+
+    private func preferredClassificationModule(from modules: [AnalyzerSnapshot]) -> AnalyzerSnapshot? {
+        modules.max { lhs, rhs in
+            if abs(lhs.confidence - rhs.confidence) > 1e-9 {
+                return lhs.confidence < rhs.confidence
+            }
+            let lhsPriority = classificationPriority(for: lhs.analyzerID)
+            let rhsPriority = classificationPriority(for: rhs.analyzerID)
+            if lhsPriority != rhsPriority {
+                return lhsPriority < rhsPriority
+            }
+            return lhs.analyzerID > rhs.analyzerID
+        }
+    }
+
+    private func classificationPriority(for analyzerID: String) -> Int {
+        switch analyzerID {
+        case "collision":
+            return 600
+        case "pendulum":
+            return 500
+        case "circular":
+            return 450
+        case "projectile":
+            return 400
+        case "spring":
+            return 300
+        case "incline":
+            return 200
+        default:
+            return 0
+        }
     }
 
     func buildDerivedEvents(
