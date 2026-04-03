@@ -149,7 +149,7 @@ final class NativeBatchCoordinatorTests: XCTestCase {
     }
 
     private func makeSessionSnapshot(
-        for clip: BenchmarkClipFixture,
+        for clip: NativeBenchmarkClip,
         trialID: String,
         endFrame: Int,
         additionalObjects: [AdditionalObjectSnapshot]
@@ -218,23 +218,11 @@ final class NativeBatchCoordinatorTests: XCTestCase {
         )
     }
 
-    private func loadBenchmarkClips() throws -> [BenchmarkClipFixture] {
-        let manifestURL = repositoryRoot.appendingPathComponent("sample_data/benchmark_manifest.json")
-        let data = try Data(contentsOf: manifestURL)
-        let manifest = try JSONDecoder().decode(BenchmarkManifestFixture.self, from: data)
-        return manifest.clips.map { clip in
-            BenchmarkClipFixture(
-                name: clip.name,
-                videoURL: repositoryRoot.appendingPathComponent("sample_data").appendingPathComponent(clip.videoPath),
-                startFrame: clip.startFrame,
-                initialBBox: BBoxSnapshot(
-                    x: clip.initialBBox[0],
-                    y: clip.initialBBox[1],
-                    width: clip.initialBBox[2],
-                    height: clip.initialBBox[3]
-                )
-            )
-        }
+    private func loadBenchmarkClips() throws -> [NativeBenchmarkClip] {
+        try NativeTrackingBenchmark.loadClips(
+            manifestURL: try NativeTrackingBenchmark.defaultManifestURL(repositoryRoot: repositoryRoot),
+            repositoryRoot: repositoryRoot
+        )
     }
 
     private func makeTemporaryOutputDirectory(name: String) -> URL {
@@ -255,30 +243,5 @@ final class NativeBatchCoordinatorTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-    }
-}
-
-private struct BenchmarkClipFixture {
-    var name: String
-    var videoURL: URL
-    var startFrame: Int
-    var initialBBox: BBoxSnapshot
-}
-
-private struct BenchmarkManifestFixture: Decodable {
-    var clips: [BenchmarkManifestClipFixture]
-}
-
-private struct BenchmarkManifestClipFixture: Decodable {
-    var name: String
-    var videoPath: String
-    var startFrame: Int
-    var initialBBox: [Double]
-
-    enum CodingKeys: String, CodingKey {
-        case name
-        case videoPath = "video_path"
-        case startFrame = "start_frame"
-        case initialBBox = "initial_bbox"
     }
 }

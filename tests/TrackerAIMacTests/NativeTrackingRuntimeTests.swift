@@ -4,6 +4,22 @@ import XCTest
 @testable import TrackerAIMac
 
 final class NativeTrackingRuntimeTests: XCTestCase {
+    func testNativeBenchmarkManifestCoversRealVideoFailureModes() throws {
+        let clips = try loadBenchmarkClips()
+        let coveredTags = Set(clips.flatMap(\.tags))
+
+        XCTAssertTrue(coveredTags.isSuperset(of: [
+            "blur",
+            "glare",
+            "illumination_shift",
+            "occlusion",
+            "disappearance",
+            "camera_jitter",
+            "distractor",
+            "scale_drift",
+        ]))
+    }
+
     func testNativeTrackerPreservesObservationMetadataAndFrameRange() async throws {
         let clip = try XCTUnwrap(loadBenchmarkClips().first(where: { $0.name == "marker_blur_glare" }))
         let source = try await NativeVideoSource.open(url: clip.videoURL)
@@ -39,6 +55,77 @@ final class NativeTrackingRuntimeTests: XCTestCase {
         XCTAssertEqual(result.observations.first?.state, NativeTrackingState.tracking.rawValue)
         XCTAssertFalse(result.observations.contains { $0.state.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
         XCTAssertEqual(result.quality.reviewRecommended, false)
+    }
+
+    func testNativeBenchmarkHarnessComputesMetricsFromAnnotatedTrack() throws {
+        let clip = try XCTUnwrap(loadBenchmarkClips().first(where: { $0.name == "marker_blur_glare" }))
+        let observations = clip.annotations.enumerated().map { index, annotation in
+            makeObservation(
+                frameIndex: annotation.frameIndex,
+                x: annotation.centroidXPixels,
+                y: annotation.centroidYPixels,
+                confidence: index == 1 ? 0.25 : 0.95,
+                lost: index == 1,
+                state: index == 1 ? NativeTrackingState.lost.rawValue : NativeTrackingState.tracking.rawValue
+            ).withBBox(annotation.bbox)
+        }
+        let track = NativeTrackResult(
+            observations: observations,
+            trackerName: "benchmark_fixture",
+            averageConfidence: observations.map(\.confidence).reduce(0, +) / Double(observations.count),
+            startFrame: clip.startFrame,
+            endFrame: observations.last?.frameIndex ?? clip.startFrame,
+            initialBBox: clip.initialBBox,
+            quality: NativeTrackRuntimeDerivation.computeQualityMetadata(observations: observations),
+            trackingConfig: TrackingConfigSnapshot.pythonDefaults.withBidirectionalRefinement(false)
+        )
+
+        let metrics = try NativeTrackingBenchmark.evaluate(track: track, against: clip)
+
+        XCTAssertEqual(metrics.clipName, clip.name)
+        XCTAssertEqual(metrics.annotatedFrameCount, clip.annotations.count)
+        XCTAssertEqual(metrics.medianCenterErrorPixels, 0, accuracy: 1e-12)
+        XCTAssertEqual(metrics.p95CenterErrorPixels, 0, accuracy: 1e-12)
+        XCTAssertEqual(metrics.meanIoU, 1, accuracy: 1e-12)
+        XCTAssertEqual(metrics.lostFrameRate, 1.0 / Double(clip.annotations.count), accuracy: 1e-12)
+        XCTAssertEqual(metrics.reacquisitionLatencyFrames, 5)
+    }
+
+    func testNativeBenchmarkSuiteAggregatesMetricsFromRunnerOutput() async throws {
+        let clips = Array(try loadBenchmarkClips().prefix(2))
+        let metricsByClip = Dictionary(
+            uniqueKeysWithValues: [
+                NativeBenchmarkMetrics(
+                    clipName: clips[0].name,
+                    annotatedFrameCount: 18,
+                    medianCenterErrorPixels: 2.0,
+                    p95CenterErrorPixels: 4.0,
+                    meanIoU: 0.91,
+                    lostFrameRate: 0.0,
+                    reacquisitionLatencyFrames: 0
+                ),
+                NativeBenchmarkMetrics(
+                    clipName: clips[1].name,
+                    annotatedFrameCount: 20,
+                    medianCenterErrorPixels: 6.0,
+                    p95CenterErrorPixels: 10.0,
+                    meanIoU: 0.73,
+                    lostFrameRate: 0.15,
+                    reacquisitionLatencyFrames: 7
+                ),
+            ].map { ($0.clipName, $0) }
+        )
+
+        let suite = try await NativeTrackingBenchmark.evaluateSuite(clips: clips) { clip in
+            try XCTUnwrap(metricsByClip[clip.name], "Missing stubbed metrics for \(clip.name)")
+        }
+
+        XCTAssertEqual(suite.clipMetrics.count, 2)
+        XCTAssertEqual(suite.medianCenterErrorPixels, 4.0, accuracy: 1e-12)
+        XCTAssertEqual(suite.p95CenterErrorPixels, 10.0, accuracy: 1e-12)
+        XCTAssertEqual(suite.meanIoU, 0.82, accuracy: 1e-12)
+        XCTAssertEqual(suite.lostFrameRate, 0.075, accuracy: 1e-12)
+        XCTAssertEqual(suite.maxReacquisitionLatencyFrames, 7)
     }
 
     func testSyntheticRecoveryEscalatesToFullSearchAndPreservesRecoveryMetadata() throws {
@@ -566,7 +653,8 @@ final class NativeTrackingRuntimeTests: XCTestCase {
                 try skipIfVideoDecodingUnsupported(error)
                 throw error
             }
-            let metrics = evaluate(track: result, against: clip)
+            let metrics = try evaluate(track: result, against: clip)
+            XCTAssertGreaterThan(metrics.meanIoU, 0)
 
             XCTAssertLessThanOrEqual(
                 metrics.p95CenterErrorPixels,
@@ -586,95 +674,43 @@ final class NativeTrackingRuntimeTests: XCTestCase {
         }
     }
 
-    private func loadBenchmarkClips() throws -> [BenchmarkClipFixture] {
-        let manifestURL = repositoryRoot.appendingPathComponent("sample_data/benchmark_manifest.json")
-        let data = try Data(contentsOf: manifestURL)
-        let manifest = try JSONDecoder().decode(BenchmarkManifestFixture.self, from: data)
-        return manifest.clips.map { clip in
-            BenchmarkClipFixture(
-                name: clip.name,
-                videoURL: repositoryRoot.appendingPathComponent("sample_data").appendingPathComponent(clip.videoPath),
-                startFrame: clip.startFrame,
-                initialBBox: BBoxSnapshot(
-                    x: clip.initialBBox[0],
-                    y: clip.initialBBox[1],
-                    width: clip.initialBBox[2],
-                    height: clip.initialBBox[3]
-                ),
-                annotations: clip.annotations.map {
-                    BenchmarkAnnotationFixture(
-                        frameIndex: $0.frameIndex,
-                        centroidX: $0.centroidXPx,
-                        centroidY: $0.centroidYPx,
-                        bbox: BBoxSnapshot(
-                            x: $0.bbox[0],
-                            y: $0.bbox[1],
-                            width: $0.bbox[2],
-                            height: $0.bbox[3]
-                        )
-                    )
-                }
-            )
+    func testNativeBenchmarkSuiteAggregatesRegressionMetrics() async throws {
+        if ProcessInfo.processInfo.environment["CODEX_CI"] != nil {
+            throw XCTSkip("Benchmark suite coverage is skipped in the Codex CI-style environment.")
         }
+
+        let runner = NativeTrackingBenchmarkRunner()
+        let suite: NativeBenchmarkSuiteMetrics
+        do {
+            suite = try await runner.evaluateSuite(
+                manifestURL: try NativeTrackingBenchmark.defaultManifestURL(repositoryRoot: repositoryRoot),
+                repositoryRoot: repositoryRoot
+            )
+        } catch {
+            try skipIfVideoDecodingUnsupported(error)
+            throw error
+        }
+
+        XCTAssertEqual(suite.clipMetrics.count, NativeTrackingParityTargets.benchmarkReleaseGate.count)
+        XCTAssertLessThanOrEqual(suite.medianCenterErrorPixels, 6.0)
+        XCTAssertLessThanOrEqual(suite.p95CenterErrorPixels, 18.0)
+        XCTAssertLessThanOrEqual(suite.lostFrameRate, 0.05)
+        XCTAssertLessThanOrEqual(suite.maxReacquisitionLatencyFrames, 10)
+        XCTAssertGreaterThan(suite.meanIoU, 0)
     }
 
     private func evaluate(
         track: NativeTrackResult,
-        against clip: BenchmarkClipFixture
-    ) -> NativeBenchmarkMetricsFixture {
-        let observationByFrame = track.observationByFrame()
-        var centerErrors: [Double] = []
-        var lostFrames = 0
-        var annotatedIndices: [Int] = []
-
-        for annotation in clip.annotations {
-            guard let observation = observationByFrame[annotation.frameIndex] else { continue }
-            annotatedIndices.append(annotation.frameIndex)
-            centerErrors.append(
-                hypot(
-                    observation.centroidXPixels - annotation.centroidX,
-                    observation.centroidYPixels - annotation.centroidY
-                )
-            )
-            if observation.lost {
-                lostFrames += 1
-            }
-        }
-
-        let sortedIndices = annotatedIndices.sorted()
-        var reacquisitionLatency = 0
-        if let first = sortedIndices.first, let last = sortedIndices.last {
-            var lostStart: Int?
-            for frameIndex in first...last {
-                guard let observation = observationByFrame[frameIndex] else { continue }
-                if observation.lost, lostStart == nil {
-                    lostStart = frameIndex
-                } else if let start = lostStart, !observation.lost {
-                    reacquisitionLatency = max(reacquisitionLatency, frameIndex - start)
-                    lostStart = nil
-                }
-            }
-        }
-
-        return NativeBenchmarkMetricsFixture(
-            p95CenterErrorPixels: percentile(values: centerErrors, quantile: 0.95),
-            lostFrameRate: centerErrors.isEmpty ? 1.0 : Double(lostFrames) / Double(centerErrors.count),
-            reacquisitionLatencyFrames: reacquisitionLatency
-        )
+        against clip: NativeBenchmarkClip
+    ) throws -> NativeBenchmarkMetrics {
+        try NativeTrackingBenchmark.evaluate(track: track, against: clip)
     }
 
-    private func percentile(values: [Double], quantile: Double) -> Double {
-        guard let first = values.sorted().first else { return 0 }
-        let sorted = values.sorted()
-        guard sorted.count > 1 else { return first }
-        let position = max(0.0, min(Double(sorted.count - 1), Double(sorted.count - 1) * quantile))
-        let lowerIndex = Int(position.rounded(.down))
-        let upperIndex = Int(position.rounded(.up))
-        if lowerIndex == upperIndex {
-            return sorted[lowerIndex]
-        }
-        let alpha = position - Double(lowerIndex)
-        return sorted[lowerIndex] + ((sorted[upperIndex] - sorted[lowerIndex]) * alpha)
+    private func loadBenchmarkClips() throws -> [NativeBenchmarkClip] {
+        try NativeTrackingBenchmark.loadClips(
+            manifestURL: try NativeTrackingBenchmark.defaultManifestURL(repositoryRoot: repositoryRoot),
+            repositoryRoot: repositoryRoot
+        )
     }
 
     private func assertApproximatelyEqual(
@@ -975,62 +1011,15 @@ private extension TrackingConfigSnapshot {
     }
 }
 
-private struct NativeBenchmarkMetricsFixture {
-    var p95CenterErrorPixels: Double
-    var lostFrameRate: Double
-    var reacquisitionLatencyFrames: Int
+private extension NativeTrackingObservation {
+    func withBBox(_ bbox: BBoxSnapshot) -> NativeTrackingObservation {
+        var copy = self
+        copy.bbox = bbox
+        return copy
+    }
 }
 
 private struct SyntheticObject {
     var rect: CGRect
     var color: (UInt8, UInt8, UInt8)
-}
-
-private struct BenchmarkClipFixture {
-    var name: String
-    var videoURL: URL
-    var startFrame: Int
-    var initialBBox: BBoxSnapshot
-    var annotations: [BenchmarkAnnotationFixture]
-}
-
-private struct BenchmarkAnnotationFixture {
-    var frameIndex: Int
-    var centroidX: Double
-    var centroidY: Double
-    var bbox: BBoxSnapshot
-}
-
-private struct BenchmarkManifestFixture: Decodable {
-    var clips: [BenchmarkManifestClipFixture]
-}
-
-private struct BenchmarkManifestClipFixture: Decodable {
-    var name: String
-    var videoPath: String
-    var startFrame: Int
-    var initialBBox: [Double]
-    var annotations: [BenchmarkManifestAnnotationFixture]
-
-    enum CodingKeys: String, CodingKey {
-        case name
-        case videoPath = "video_path"
-        case startFrame = "start_frame"
-        case initialBBox = "initial_bbox"
-        case annotations
-    }
-}
-
-private struct BenchmarkManifestAnnotationFixture: Decodable {
-    var frameIndex: Int
-    var centroidXPx: Double
-    var centroidYPx: Double
-    var bbox: [Double]
-
-    enum CodingKeys: String, CodingKey {
-        case frameIndex = "frame_index"
-        case centroidXPx = "centroid_x_px"
-        case centroidYPx = "centroid_y_px"
-        case bbox
-    }
 }

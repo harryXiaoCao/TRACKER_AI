@@ -230,10 +230,11 @@ The goal of the next migration phase should be to eliminate `PythonEngineBridge.
 
 ### 19. Port the benchmark and regression harness to Swift
 
-- [ ] Reuse `sample_data/benchmark_manifest.json` from Swift.
-- [ ] Build a native benchmark runner for the real-world failure-mode clips.
-- [ ] Measure center error, IoU, lost rate, and reacquisition latency natively.
-- [ ] Treat benchmark parity as a release gate before removing the Python backend.
+- [x] Reuse `sample_data/benchmark_manifest.json` from Swift.
+- [x] Build a native benchmark runner for the real-world failure-mode clips.
+- [x] Measure center error, IoU, lost rate, and reacquisition latency natively.
+- [x] Treat benchmark parity as a release gate before removing the Python backend.
+  Swift benchmark/regression coverage now lives in `Sources/TrackerAIMac/Core/NativeTrackingBenchmark.swift`, which loads `sample_data/benchmark_manifest.json`, computes per-clip and suite metrics (center error, IoU, lost rate, reacquisition latency), and provides a reusable native runner for the real benchmark clips. The Swift tests no longer duplicate manifest parsing or metric math ad hoc: `tests/TrackerAIMacTests/NativeTrackingRuntimeTests.swift` now covers manifest/tag coverage, metric computation, suite aggregation, and the existing benchmark-backed release-gate path, while coordinator and batch regressions reuse the same manifest loader for end-to-end native execution smoke coverage.
 
 ### 20. Create Swift-native test coverage before large engine replacement
 
