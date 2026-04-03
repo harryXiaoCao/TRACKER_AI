@@ -119,18 +119,50 @@ struct WorkspaceDeckView: View {
                 TrackerPanel {
                     VStack(alignment: .leading, spacing: 12) {
                         SectionEyebrow(text: "Instrument HUD")
+                        if model.trackBundles.count > 1 {
+                            Picker(
+                                "Track",
+                                selection: Binding(
+                                    get: { model.activeTrackID },
+                                    set: { model.activateAnalysisTrack($0) }
+                                )
+                            ) {
+                                ForEach(model.trackBundles) { bundle in
+                                    Text("\(bundle.trackName) [\(bundle.trackKind)]").tag(bundle.trackID)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                        }
                         WorkspaceMetricRow(label: "Frame", value: "\(model.currentFrame)")
-                        WorkspaceMetricRow(label: "Range", value: "\(model.startFrame) → \(model.endFrame)")
-                        WorkspaceMetricRow(label: "Preset", value: model.selectedPreset.title)
-                        WorkspaceMetricRow(label: "Reference", value: model.referenceMarkerStatus)
+                        WorkspaceMetricRow(label: "Time", value: model.currentFrameTimestampText)
+                        WorkspaceMetricRow(label: "Track", value: model.currentFrameTrackName)
+                        WorkspaceMetricRow(label: "State", value: model.currentFrameStateText)
+                        WorkspaceMetricRow(label: "Tracker", value: model.currentFrameConfidenceText)
+                        WorkspaceMetricRow(label: "Scientific", value: model.currentFrameScientificConfidenceText)
+                        WorkspaceMetricRow(label: "BBox", value: model.currentFrameBBoxText)
+                        WorkspaceMetricRow(label: "Speed", value: model.currentFrameSpeedText)
+                        WorkspaceMetricRow(label: "Accel", value: model.currentFrameAccelerationText)
+                        WorkspaceMetricRow(label: "Reference", value: model.currentFrameReferenceText)
                         WorkspaceMetricRow(label: "Engine", value: model.engineState.rawValue)
                     }
                 }
-                .frame(width: 240)
+                .frame(width: 280)
 
                 TrackerPanel {
                     VStack(alignment: .leading, spacing: 12) {
                         SectionEyebrow(text: "Range + Review Controls")
+                        HStack(spacing: 8) {
+                            Button("Use This Frame", action: useCurrentFrameAsStart)
+                                .buttonStyle(GhostActionButtonStyle())
+                            Button("Use As End", action: useCurrentFrameAsEnd)
+                                .buttonStyle(GhostActionButtonStyle())
+                            Button("Next Problem", action: jumpNextProblem)
+                                .buttonStyle(GhostActionButtonStyle())
+                                .disabled(!model.canNavigateToNextReviewIssue)
+                            Button("Next Correction", action: jumpNextCorrection)
+                                .buttonStyle(GhostActionButtonStyle())
+                                .disabled(!model.canNavigateToNextCorrection)
+                        }
                         HStack(spacing: 8) {
                             Button("Jump Overview", action: jumpOverview)
                                 .buttonStyle(GhostActionButtonStyle())
@@ -180,6 +212,22 @@ struct WorkspaceDeckView: View {
 
     private func stepForward() {
         model.stepFrame(by: 1)
+    }
+
+    private func useCurrentFrameAsStart() {
+        model.setStartFrameToCurrentFrame()
+    }
+
+    private func useCurrentFrameAsEnd() {
+        model.setEndFrameToCurrentFrame()
+    }
+
+    private func jumpNextProblem() {
+        model.jumpToNextProblemFrame()
+    }
+
+    private func jumpNextCorrection() {
+        model.jumpToNextCorrectionFrame()
     }
 
     private func jumpOverview() {

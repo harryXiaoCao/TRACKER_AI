@@ -8,10 +8,32 @@ struct ReviewJournalView: View {
             TrackerPanel {
                 VStack(alignment: .leading, spacing: 12) {
                     SectionEyebrow(text: "Review Queue")
+                    if model.trackBundles.count > 1 {
+                        Picker(
+                            "Track",
+                            selection: Binding(
+                                get: { model.activeTrackID },
+                                set: { model.activateAnalysisTrack($0) }
+                            )
+                        ) {
+                            ForEach(model.trackBundles) { bundle in
+                                Text("\(bundle.trackName) [\(bundle.trackKind)]").tag(bundle.trackID)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    }
                     HStack(spacing: 10) {
+                        Button("Next Problem", action: jumpNextProblem)
+                            .buttonStyle(GhostActionButtonStyle())
+                            .disabled(!model.canNavigateToNextReviewIssue)
+                        Button("Next Correction", action: jumpNextCorrection)
+                            .buttonStyle(GhostActionButtonStyle())
+                            .disabled(!model.canNavigateToNextCorrection)
                         Button("Window Start = Current", action: markWindowStart)
                             .buttonStyle(GhostActionButtonStyle())
                         Button("Window End = Current", action: markWindowEnd)
+                            .buttonStyle(GhostActionButtonStyle())
+                        Button("Full Window", action: resetWindow)
                             .buttonStyle(GhostActionButtonStyle())
                         Button("Dismiss Current Frame", action: dismissCurrentFrame)
                             .buttonStyle(GhostActionButtonStyle())
@@ -220,6 +242,18 @@ struct ReviewJournalView: View {
 
     private func restoreDismissed() {
         model.restoreDismissedReviews()
+    }
+
+    private func resetWindow() {
+        model.resetWindowSelection()
+    }
+
+    private func jumpNextProblem() {
+        model.jumpToNextProblemFrame()
+    }
+
+    private func jumpNextCorrection() {
+        model.jumpToNextCorrectionFrame()
     }
 
     private func issueFrameText(_ issue: ReviewIssue) -> String {

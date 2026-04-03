@@ -210,14 +210,15 @@ The goal of the next migration phase should be to eliminate `PythonEngineBridge.
 
 ### 17. Close the remaining setup/review parity gaps from the Qt app
 
-- [ ] Review `src/tracker_ai/ui/main_window.py` and port any remaining user-facing scientific controls still missing in Swift.
-- [ ] Confirm parity for:
+- [x] Review `src/tracker_ai/ui/main_window.py` and port any remaining user-facing scientific controls still missing in Swift.
+- [x] Confirm parity for:
   - advanced calibration editing
   - reference marker flows
   - track selector behavior
   - review navigation helpers
   - frame-HUD scientific context
-- [ ] Remove or redesign any UI concepts that only existed to accommodate Qt/Python constraints.
+- [x] Remove or redesign any UI concepts that only existed to accommodate Qt/Python constraints.
+  Swift setup/review parity is now closed around the remaining Qt-era workflow helpers: setup gained `Use Current` frame capture for start/end bounds, the workspace and review surfaces now expose `Next Problem` / `Next Correction` navigation, multi-track runs can switch the active track directly from the workspace HUD and review queue instead of only from Results, and the workspace HUD now shows per-frame scientific context (time, track, state, tracker/scientific confidence, bbox, speed, acceleration, reference state) rather than the older Qt shell's split HUD/status labels. Advanced calibration editing and reference-marker authoring stayed native-first, while the Qt-only division between results selectors and review navigation was intentionally redesigned into the Swift workspace/review panels instead of copied verbatim. Focused Swift regressions for range capture, review navigation, and track-aware HUD context now live in `tests/TrackerAIMacTests/SetupReviewParityTests.swift`.
 
 ### 18. Port the batch engine to Swift-native execution
 

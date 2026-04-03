@@ -1,6 +1,7 @@
 import AVFoundation
 import CoreGraphics
 import Foundation
+import VideoToolbox
 
 struct NativeVideoMetadata: Codable, Hashable {
     var path: String
@@ -49,17 +50,23 @@ final class NativeVideoSource {
     let url: URL
     let metadata: NativeVideoMetadata
 
+    private let asset: AVAsset
+    private let videoTrack: AVAssetTrack
     private let sampleTimes: [CMTime]
     private let imageGenerator: AVAssetImageGenerator
 
     private init(
         url: URL,
         metadata: NativeVideoMetadata,
+        asset: AVAsset,
+        videoTrack: AVAssetTrack,
         sampleTimes: [CMTime],
         imageGenerator: AVAssetImageGenerator
     ) {
         self.url = url
         self.metadata = metadata
+        self.asset = asset
+        self.videoTrack = videoTrack
         self.sampleTimes = sampleTimes
         self.imageGenerator = imageGenerator
     }
@@ -120,6 +127,8 @@ final class NativeVideoSource {
         return NativeVideoSource(
             url: url,
             metadata: metadata,
+            asset: asset,
+            videoTrack: track,
             sampleTimes: resolvedTimes,
             imageGenerator: imageGenerator
         )
@@ -137,11 +146,12 @@ final class NativeVideoSource {
 
     func readFrame(atFrameIndex frameIndex: Int) throws -> NativeVideoFrame {
         let time = try presentationTime(forFrameIndex: frameIndex)
+        let timestamp = try frameTimestamp(forFrameIndex: frameIndex)
         do {
             let image = try imageGenerator.copyCGImage(at: time, actualTime: nil)
             return NativeVideoFrame(
                 frameIndex: frameIndex,
-                timestamp: try frameTimestamp(forFrameIndex: frameIndex),
+                timestamp: timestamp,
                 image: image
             )
         } catch {
@@ -161,11 +171,18 @@ final class NativeVideoSource {
                 let image = try imageGenerator.copyCGImage(at: time, actualTime: &actualTime)
                 return NativeVideoFrame(
                     frameIndex: frameIndex,
-                    timestamp: try frameTimestamp(forFrameIndex: frameIndex),
+                    timestamp: timestamp,
                     image: image
                 )
             } catch {
-                throw NativeVideoSourceError.unreadableFrame(frameIndex)
+                guard let image = try decodeFrameWithReader(atFrameIndex: frameIndex) else {
+                    throw NativeVideoSourceError.unreadableFrame(frameIndex)
+                }
+                return NativeVideoFrame(
+                    frameIndex: frameIndex,
+                    timestamp: timestamp,
+                    image: image
+                )
             }
         }
     }
@@ -204,6 +221,53 @@ final class NativeVideoSource {
         guard frameIndex >= 0, frameIndex <= lastFrameIndex else {
             throw NativeVideoSourceError.invalidFrameIndex(frameIndex)
         }
+    }
+
+    private func decodeFrameWithReader(atFrameIndex frameIndex: Int) throws -> CGImage? {
+        let reader = try AVAssetReader(asset: asset)
+        let outputSettings: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+        ]
+        let output = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: outputSettings)
+        output.alwaysCopiesSampleData = false
+        guard reader.canAdd(output) else {
+            throw NativeVideoSourceError.unreadableFrame(frameIndex)
+        }
+        reader.add(output)
+
+        let startTime = sampleTimes[frameIndex]
+        let frameDuration = CMTime(
+            seconds: max(metadata.nominalFrameDurationSeconds, 1.0 / max(metadata.fps, 1.0)),
+            preferredTimescale: 600
+        )
+        let tolerance = CMTimeMultiplyByFloat64(frameDuration, multiplier: 2.0)
+        reader.timeRange = CMTimeRange(start: startTime, duration: tolerance)
+
+        guard reader.startReading() else {
+            throw reader.error ?? NativeVideoSourceError.unreadableFrame(frameIndex)
+        }
+
+        defer {
+            if reader.status == .reading {
+                reader.cancelReading()
+            }
+        }
+
+        while let sampleBuffer = output.copyNextSampleBuffer() {
+            let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+            guard presentationTime >= startTime else { continue }
+            guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { continue }
+            var image: CGImage?
+            let status = VTCreateCGImageFromCVPixelBuffer(imageBuffer, options: nil, imageOut: &image)
+            if status == noErr, let image {
+                return image
+            }
+        }
+
+        if reader.status == .failed {
+            throw reader.error ?? NativeVideoSourceError.unreadableFrame(frameIndex)
+        }
+        return nil
     }
 
     private func resolvedFrameIndices(

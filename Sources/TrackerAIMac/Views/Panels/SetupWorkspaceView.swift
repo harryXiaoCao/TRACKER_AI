@@ -185,13 +185,21 @@ struct SetupWorkspaceView: View {
                     VStack(alignment: .leading, spacing: 14) {
                         SectionEyebrow(text: "Execution")
                         MacFormRow(label: "Start Frame") {
-                            Stepper(value: $model.startFrame, in: 0...max(model.endFrame, 1)) {
-                                Text("\(model.startFrame)")
+                            HStack(spacing: 10) {
+                                Stepper(value: $model.startFrame, in: 0...max(model.endFrame, 1)) {
+                                    Text("\(model.startFrame)")
+                                }
+                                Button("Use Current", action: useCurrentFrameAsStart)
+                                    .buttonStyle(GhostActionButtonStyle())
                             }
                         }
                         MacFormRow(label: "End Frame") {
-                            Stepper(value: $model.endFrame, in: model.startFrame...max(model.startFrame + 1, 100_000)) {
-                                Text("\(model.endFrame)")
+                            HStack(spacing: 10) {
+                                Stepper(value: $model.endFrame, in: model.startFrame...max(model.startFrame + 1, 100_000)) {
+                                    Text("\(model.endFrame)")
+                                }
+                                Button("Use Current", action: useCurrentFrameAsEnd)
+                                    .buttonStyle(GhostActionButtonStyle())
                             }
                         }
                         HStack(spacing: 10) {
@@ -252,6 +260,14 @@ struct SetupWorkspaceView: View {
 
     private func cancelAnalysis() {
         model.cancelAnalysis()
+    }
+
+    private func useCurrentFrameAsStart() {
+        model.setStartFrameToCurrentFrame()
+    }
+
+    private func useCurrentFrameAsEnd() {
+        model.setEndFrameToCurrentFrame()
     }
 }
 

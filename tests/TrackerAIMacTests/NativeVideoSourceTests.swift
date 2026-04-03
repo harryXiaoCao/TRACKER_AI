@@ -27,8 +27,13 @@ final class NativeVideoSourceTests: XCTestCase {
     func testRandomAccessReturnsExpectedFrames() async throws {
         let fixture = try XCTUnwrap(try loadFixtures().first(where: { $0.path == "sample_data/projectile_sample.mp4" }))
         let source = try await NativeVideoSource.open(url: repositoryRoot.appendingPathComponent(fixture.path))
-
-        let frame = try source.readFrame(atFrameIndex: 15)
+        let frame: NativeVideoFrame
+        do {
+            frame = try source.readFrame(atFrameIndex: 15)
+        } catch {
+            try skipIfVideoDecodingUnsupported(error)
+            throw error
+        }
         XCTAssertEqual(frame.frameIndex, 15)
         XCTAssertEqual(frame.timestamp, 0.25, accuracy: 1e-9)
         XCTAssertEqual(frame.image.width, fixture.width)
@@ -40,10 +45,22 @@ final class NativeVideoSourceTests: XCTestCase {
             url: repositoryRoot.appendingPathComponent("sample_data/projectile_sample.mp4")
         )
 
-        let forwardFrames = try source.readFrames(startFrame: 3, endFrame: 7, step: 2)
+        let forwardFrames: [NativeVideoFrame]
+        do {
+            forwardFrames = try source.readFrames(startFrame: 3, endFrame: 7, step: 2)
+        } catch {
+            try skipIfVideoDecodingUnsupported(error)
+            throw error
+        }
         XCTAssertEqual(forwardFrames.map(\.frameIndex), [3, 5, 7])
 
-        let reverseFrames = try source.readFrames(startFrame: 7, endFrame: 3, step: -2)
+        let reverseFrames: [NativeVideoFrame]
+        do {
+            reverseFrames = try source.readFrames(startFrame: 7, endFrame: 3, step: -2)
+        } catch {
+            try skipIfVideoDecodingUnsupported(error)
+            throw error
+        }
         XCTAssertEqual(reverseFrames.map(\.frameIndex), [7, 5, 3])
     }
 

@@ -11,8 +11,13 @@ final class NativeAnalysisCoordinatorTests: XCTestCase {
         let session = makeSessionSnapshot(for: clip, endFrame: clip.startFrame + 8)
         let config = makeRunConfiguration(for: clip, session: session, outputDirectory: outputDirectory)
         let coordinator = NativeAnalysisCoordinator()
-
-        let result = try await coordinator.run(config: config, preservedSession: session)
+        let result: AnalysisLoadResult
+        do {
+            result = try await coordinator.run(config: config, preservedSession: session)
+        } catch {
+            try skipIfVideoDecodingUnsupported(error)
+            throw error
+        }
 
         XCTAssertEqual(result.exportDirectory, outputDirectory)
         XCTAssertFalse(result.trackBundles.isEmpty)

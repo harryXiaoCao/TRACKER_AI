@@ -210,6 +210,70 @@ final class AppModel {
     var internalTrackingControlsSummary: String {
         "Session-persistent but internal-only for now: search margins, thresholds, interpolation, scale factors, template update tuning, and marker confidence bias."
     }
+    var currentFrameTimestampText: String {
+        String(format: "%.3f s", currentFrameTimestamp)
+    }
+    var currentFrameTrackName: String {
+        trackDisplayName(for: activeTrackID)
+    }
+    var currentFrameStateText: String {
+        if let observation = currentObservation {
+            let state = observation.state.trimmingCharacters(in: .whitespacesAndNewlines)
+            return state.isEmpty ? "--" : state.capitalized
+        }
+        if let row = currentAnalysisRow {
+            let state = row.state.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !state.isEmpty {
+                return state.capitalized
+            }
+            if row.lost {
+                return "Lost"
+            }
+        }
+        return "--"
+    }
+    var currentFrameConfidenceText: String {
+        if let observation = currentObservation {
+            return formatted(observation.confidence)
+        }
+        return formatted(currentAnalysisRow?.trackerConfidence)
+    }
+    var currentFrameScientificConfidenceText: String {
+        formatted(currentAnalysisRow?.scientificConfidence)
+    }
+    var currentFrameBBoxText: String {
+        if let bbox = currentObservation?.bbox {
+            return "\(Int(bbox.width.rounded()))x\(Int(bbox.height.rounded())) px"
+        }
+        if
+            let width = targetBox.cgRect?.width,
+            let height = targetBox.cgRect?.height
+        {
+            return "\(Int(width.rounded()))x\(Int(height.rounded())) px"
+        }
+        return "--"
+    }
+    var currentFrameSpeedText: String {
+        if let speed = currentAnalysisRow?.speed {
+            return "\(formatted(speed)) \(unitLabel)/s"
+        }
+        return "--"
+    }
+    var currentFrameAccelerationText: String {
+        if let acceleration = currentAnalysisRow?.accelerationMagnitude {
+            return "\(formatted(acceleration)) \(unitLabel)/s²"
+        }
+        return "--"
+    }
+    var currentFrameReferenceText: String {
+        isReferenceReady ? "Enabled" : "Off"
+    }
+    var canNavigateToNextReviewIssue: Bool {
+        nextProblemFrame(after: currentFrame) != nil
+    }
+    var canNavigateToNextCorrection: Bool {
+        nextCorrectionFrame(after: currentFrame) != nil
+    }
     var windowSummary: WindowStatsSnapshot? {
         guard !analysisRows.isEmpty else { return nil }
         let start = max(selectedWindowStart ?? startFrame, analysisRows.first?.frameIndex ?? startFrame)
@@ -451,6 +515,26 @@ final class AppModel {
         seekPlayer()
     }
 
+    func setStartFrameToCurrentFrame() {
+        startFrame = currentFrame
+        if endFrame < startFrame {
+            endFrame = startFrame
+        }
+        clampSelectedWindowToFrameRange()
+        statusMessage = "Start frame set to \(startFrame)."
+        selectionMessage = "Start frame saved. Set the end frame or keep the full range before analysis."
+    }
+
+    func setEndFrameToCurrentFrame() {
+        endFrame = currentFrame
+        if endFrame < startFrame {
+            startFrame = endFrame
+        }
+        clampSelectedWindowToFrameRange()
+        statusMessage = "End frame set to \(endFrame)."
+        selectionMessage = "End frame saved. The analysis will stop at this frame."
+    }
+
     func startTargetDrawing() {
         annotationMode = .target
         editingCorrectionID = nil
@@ -667,6 +751,7 @@ final class AppModel {
         guard let bundle = trackBundles.first(where: { $0.trackID == trackID }) else { return }
         activeTrackID = bundle.trackID
         hydrateResults(from: bundle)
+        refreshReviewQueue(trackQuality: sessionTrackQuality)
         statusMessage = "Loaded results for \(bundle.trackName)."
     }
 
@@ -700,6 +785,28 @@ final class AppModel {
         seekPlayer()
         selectedTab = .review
         statusMessage = "Jumped to frame \(issue.frameIndex) for \(issue.title.lowercased())."
+    }
+
+    func jumpToNextProblemFrame() {
+        guard let frameIndex = nextProblemFrame(after: currentFrame) else {
+            statusMessage = "No later review frame was found for \(activeTrackLabel)."
+            return
+        }
+        currentFrame = frameIndex
+        seekPlayer()
+        selectedTab = .review
+        statusMessage = "Jumped to review frame \(frameIndex) for \(activeTrackLabel)."
+    }
+
+    func jumpToNextCorrectionFrame() {
+        guard let frameIndex = nextCorrectionFrame(after: currentFrame) else {
+            statusMessage = "No later correction anchor was found for \(activeTrackLabel)."
+            return
+        }
+        currentFrame = frameIndex
+        seekPlayer()
+        selectedTab = .review
+        statusMessage = "Jumped to correction frame \(frameIndex) for \(activeTrackLabel)."
     }
 
     func dismissReviewIssue(_ issue: ReviewIssue) {
@@ -1647,6 +1754,58 @@ final class AppModel {
             return timestamp
         }
         return Double(frameIndex) / max(playbackFPS, 1)
+    }
+
+    private var currentTrackReconstruction: NativeTrackReconstruction? {
+        guard let activeTrackBundle else { return nil }
+        guard let session = currentScientificSessionSnapshot(for: activeTrackBundle) else { return nil }
+        return nativeTrackingPipeline.reconstructTrack(bundle: activeTrackBundle, session: session)
+    }
+
+    private var currentObservation: NativeTrackingObservation? {
+        currentTrackReconstruction?.observationByFrame[currentFrame]
+    }
+
+    private var currentAnalysisRow: AnalysisRow? {
+        analysisRows.first(where: { $0.frameIndex == currentFrame })
+    }
+
+    private func clampSelectedWindowToFrameRange() {
+        if let selectedWindowStart {
+            self.selectedWindowStart = min(max(selectedWindowStart, startFrame), endFrame)
+        } else {
+            self.selectedWindowStart = startFrame
+        }
+        if let selectedWindowEnd {
+            self.selectedWindowEnd = min(max(selectedWindowEnd, startFrame), endFrame)
+        } else {
+            self.selectedWindowEnd = endFrame
+        }
+    }
+
+    private func nextProblemFrame(after frameIndex: Int) -> Int? {
+        let qualifyingObservation = currentTrackReconstruction?.observations
+            .sorted { $0.frameIndex < $1.frameIndex }
+            .first(where: { observation in
+                guard observation.frameIndex > frameIndex else { return false }
+                guard !dismissedReviewFrames.contains(observation.frameIndex) else { return false }
+                let state = observation.state.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                return observation.lost || observation.confidence < 0.35 || (!state.isEmpty && state != NativeTrackingState.tracking.rawValue)
+            })?.frameIndex
+        if let qualifyingObservation {
+            return qualifyingObservation
+        }
+        return reviewQueue
+            .filter { $0.frameIndex > frameIndex && $0.severity != "resolved" }
+            .map(\.frameIndex)
+            .min()
+    }
+
+    private func nextCorrectionFrame(after frameIndex: Int) -> Int? {
+        corrections
+            .filter { $0.trackID == activeTrackID && $0.frameIndex > frameIndex }
+            .map(\.frameIndex)
+            .min()
     }
 
     private static func boundingBoxDraft(from rect: CGRect) -> BoundingBoxDraft {
