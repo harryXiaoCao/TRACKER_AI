@@ -1,0 +1,18 @@
+{
+  "active_video_path" : "\/tmp\/golden-video.mp4",
+  "items" : [
+    {
+      "label" : "golden_primary",
+      "notes" : "Primary session",
+      "session_path" : "\/tmp\/golden-session.json",
+      "video_path" : "\/tmp\/golden-video.mp4"
+    },
+    {
+      "label" : "golden_secondary",
+      "notes" : "Secondary session",
+      "session_path" : "\/tmp\/golden-session-2.json",
+      "video_path" : "\/tmp\/golden-video-2.mp4"
+    }
+  ],
+  "title" : "Golden Workspace"
+}

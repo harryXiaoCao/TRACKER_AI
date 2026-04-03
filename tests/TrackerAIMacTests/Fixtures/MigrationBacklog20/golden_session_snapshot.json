@@ -1,0 +1,165 @@
+{
+  "additional_objects" : [
+    {
+      "bbox" : {
+        "height" : 14,
+        "width" : 14,
+        "x" : 42,
+        "y" : 40
+      },
+      "kind" : "secondary",
+      "name" : "Secondary Marker",
+      "track_id" : "secondary_1"
+    }
+  ],
+  "advanced_mode" : true,
+  "analysis_config" : {
+    "smoothing_polyorder" : 2,
+    "smoothing_window" : 5
+  },
+  "calibration" : {
+    "axis_angle_deg" : 0,
+    "homography" : [
+      1,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      1
+    ],
+    "invert_x" : false,
+    "invert_y" : true,
+    "mode" : "single_line",
+    "origin_x_px" : 10,
+    "origin_y_px" : 12,
+    "pixel_distance" : 80,
+    "preset_name" : "lab-bench",
+    "reference_length" : 2,
+    "unit_label" : "m"
+  },
+  "corrections" : [
+    {
+      "bbox" : {
+        "height" : 22,
+        "width" : 28,
+        "x" : 56,
+        "y" : 31
+      },
+      "frame_index" : 11,
+      "note" : "manual realignment",
+      "track_id" : "primary"
+    }
+  ],
+  "event_markers" : [
+    {
+      "axis" : "",
+      "frame_index" : 4,
+      "name" : "manual_release",
+      "note" : "operator-marked release",
+      "origin" : "manual",
+      "time_s" : 0.20000000000000001,
+      "unit_label" : "s",
+      "value" : 0
+    }
+  ],
+  "export_preferences" : {
+    "include_debug_tracking" : true,
+    "include_overlay" : false,
+    "include_plots" : false,
+    "report_template" : "research"
+  },
+  "initial_bbox" : {
+    "height" : 22,
+    "width" : 28,
+    "x" : 12,
+    "y" : 24
+  },
+  "metadata" : {
+    "experiment_label" : "Golden Fixture Experiment",
+    "notes" : "Fixture-backed migration regression",
+    "operator_name" : "Codex",
+    "tags" : [
+      "golden",
+      "native",
+      "migration"
+    ],
+    "trial_id" : "trial-golden-01"
+  },
+  "reference_bbox" : {
+    "height" : 18,
+    "width" : 18,
+    "x" : 100,
+    "y" : 32
+  },
+  "review_state" : {
+    "dismissed_review_frames" : [
+      8,
+      14
+    ],
+    "last_frame_index" : 13,
+    "selected_window_end" : 15,
+    "selected_window_start" : 6
+  },
+  "scale_points" : [
+    10,
+    20,
+    90,
+    20
+  ],
+  "selected_end_frame" : 18,
+  "selected_start_frame" : 3,
+  "track_quality" : {
+    "corrected_spans" : [
+      {
+        "end_frame" : 14,
+        "reason" : "manual_correction",
+        "start_frame" : 11
+      }
+    ],
+    "lost_spans" : [
+      {
+        "end_frame" : 10,
+        "reason" : "lost_tracking",
+        "start_frame" : 9
+      }
+    ],
+    "reacquisition_count" : 1,
+    "review_recommended" : true,
+    "suspect_spans" : [
+      {
+        "end_frame" : 8,
+        "reason" : "tracking_recovery",
+        "start_frame" : 7
+      }
+    ]
+  },
+  "tracking_config" : {
+    "auto_marker_min_ratio" : 0.19,
+    "bidirectional_refinement" : false,
+    "debug_tracking" : true,
+    "detection_threshold" : 0.63,
+    "expanded_search_margin" : 7.5,
+    "interpolate_short_gaps" : false,
+    "low_confidence_threshold" : 0.40999999999999998,
+    "marker_confidence_bias" : 0.60999999999999999,
+    "max_interpolation_gap" : 4,
+    "max_prediction_frames" : 11,
+    "profile" : "marker",
+    "reacquire_threshold" : 0.69999999999999996,
+    "recovery_after_frames" : 7,
+    "robust_recovery" : false,
+    "scale_factors" : [
+      0.90000000000000002,
+      1,
+      1.1499999999999999
+    ],
+    "search_margin" : 3.25,
+    "stable_update_threshold" : 0.71999999999999997,
+    "suspect_after_frames" : 4,
+    "template_update_rate" : 0.14000000000000001
+  },
+  "video_path" : "\/tmp\/golden-video.mp4"
+}

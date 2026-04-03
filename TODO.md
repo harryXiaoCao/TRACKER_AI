@@ -238,10 +238,11 @@ The goal of the next migration phase should be to eliminate `PythonEngineBridge.
 
 ### 20. Create Swift-native test coverage before large engine replacement
 
-- [ ] Add a proper Swift test target to the package and/or Xcode project.
-- [ ] Port critical Python tests into Swift fixture-based tests.
-- [ ] Add golden-file tests for session JSON, workspace JSON, analysis rows, summary JSON, and report markdown.
-- [ ] Add cross-language comparison tests while both engines coexist.
+- [x] Add a proper Swift test target to the package and/or Xcode project.
+- [x] Port critical Python tests into Swift fixture-based tests.
+- [x] Add golden-file tests for session JSON, workspace JSON, analysis rows, summary JSON, and report markdown.
+- [x] Add cross-language comparison tests while both engines coexist.
+  The existing SwiftPM `TrackerAIMacTests` target now carries dedicated migration coverage in `tests/TrackerAIMacTests/MigrationBacklog20Tests.swift`, backed by committed golden artifacts under `tests/TrackerAIMacTests/Fixtures/MigrationBacklog20/`. Those tests lock down Swift-native session/workspace serialization plus exported analysis/summary/report artifacts, and they run live Python-vs-Swift parity checks for both compatibility-bridge session loading and scientific row generation while the two engines still coexist. The session compatibility work also exposed and fixed decode gaps for Python-authored metadata and correction track IDs in `Sources/TrackerAIMac/Core/Domain.swift`, so the new cross-language suite is exercising the real shared contract instead of a lossy subset.
 
 ### 21. Remove App Store blockers caused by the embedded Python dependency
 

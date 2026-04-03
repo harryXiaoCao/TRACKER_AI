@@ -1,0 +1,37 @@
+{
+  "average_confidence" : 0.91249999999999998,
+  "classification" : {
+    "classification_id" : "incline",
+    "confidence" : 0.84750000000000003,
+    "summary" : "Estimated from a line fit through the smoothed path.",
+    "supporting_analyzer_i_ds" : [
+      "circular",
+      "incline"
+    ],
+    "title" : "Incline Motion"
+  },
+  "corrected_frame_count" : 1,
+  "duration_seconds" : 0.14999999999999999,
+  "end_frame" : 18,
+  "event_count" : 5,
+  "frame_count" : 4,
+  "lost_frame_count" : 1,
+  "low_confidence_frame_count" : 0,
+  "mean_acceleration" : 0.46475,
+  "mean_speed" : 2.3425250000000002,
+  "net_displacement" : 0.39528470752104744,
+  "peak_acceleration" : 1.1402000000000001,
+  "peak_position_uncertainty" : 0.059999999999999998,
+  "peak_speed" : 3.9051,
+  "peak_velocity_uncertainty" : 0.22,
+  "qc_badge" : "too_much_interpolation",
+  "reacquisition_count" : 1,
+  "review_recommended" : true,
+  "scientific_confidence_mean" : 0.84750000000000003,
+  "start_frame" : 3,
+  "suspect_span_count" : 1,
+  "total_path_length" : 0.4000167129511894,
+  "unit_label" : "m",
+  "x_range_units" : 0.375,
+  "y_range_units" : 0.125
+}

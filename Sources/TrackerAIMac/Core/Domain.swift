@@ -576,6 +576,57 @@ struct ExperimentMetadataSnapshot: Codable {
         case notes
         case tags
     }
+
+    enum LegacyCodingKeys: String, CodingKey {
+        case experimentLabel
+        case trialID
+        case operatorName
+        case notes
+        case tags
+    }
+
+    enum AlternateCodingKeys: String, CodingKey {
+        case experimentLabel
+        case trialId
+        case operatorName
+        case notes
+        case tags
+    }
+
+    init(
+        experimentLabel: String?,
+        trialID: String?,
+        operatorName: String?,
+        notes: String?,
+        tags: [String]?
+    ) {
+        self.experimentLabel = experimentLabel
+        self.trialID = trialID
+        self.operatorName = operatorName
+        self.notes = notes
+        self.tags = tags
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
+        let alternate = try decoder.container(keyedBy: AlternateCodingKeys.self)
+        experimentLabel = try container.decodeIfPresent(String.self, forKey: .experimentLabel)
+            ?? legacy.decodeIfPresent(String.self, forKey: .experimentLabel)
+            ?? alternate.decodeIfPresent(String.self, forKey: .experimentLabel)
+        trialID = try container.decodeIfPresent(String.self, forKey: .trialID)
+            ?? legacy.decodeIfPresent(String.self, forKey: .trialID)
+            ?? alternate.decodeIfPresent(String.self, forKey: .trialId)
+        operatorName = try container.decodeIfPresent(String.self, forKey: .operatorName)
+            ?? legacy.decodeIfPresent(String.self, forKey: .operatorName)
+            ?? alternate.decodeIfPresent(String.self, forKey: .operatorName)
+        notes = try container.decodeIfPresent(String.self, forKey: .notes)
+            ?? legacy.decodeIfPresent(String.self, forKey: .notes)
+            ?? alternate.decodeIfPresent(String.self, forKey: .notes)
+        tags = try container.decodeIfPresent([String].self, forKey: .tags)
+            ?? legacy.decodeIfPresent([String].self, forKey: .tags)
+            ?? alternate.decodeIfPresent([String].self, forKey: .tags)
+    }
 }
 
 struct CorrectionSnapshot: Codable {
@@ -598,6 +649,13 @@ struct CorrectionSnapshot: Codable {
         case note
     }
 
+    enum AlternateCodingKeys: String, CodingKey {
+        case trackId
+        case frameIndex
+        case bbox
+        case note
+    }
+
     init(trackID: String?, frameIndex: Int, bbox: BBoxSnapshot, note: String?) {
         self.trackID = trackID
         self.frameIndex = frameIndex
@@ -608,14 +666,19 @@ struct CorrectionSnapshot: Codable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
+        let alternate = try decoder.container(keyedBy: AlternateCodingKeys.self)
         trackID = try container.decodeIfPresent(String.self, forKey: .trackID)
             ?? legacy.decodeIfPresent(String.self, forKey: .trackID)
+            ?? alternate.decodeIfPresent(String.self, forKey: .trackId)
         frameIndex = try container.decodeIfPresent(Int.self, forKey: .frameIndex)
-            ?? legacy.decode(Int.self, forKey: .frameIndex)
+            ?? legacy.decodeIfPresent(Int.self, forKey: .frameIndex)
+            ?? alternate.decode(Int.self, forKey: .frameIndex)
         bbox = try container.decodeIfPresent(BBoxSnapshot.self, forKey: .bbox)
-            ?? legacy.decode(BBoxSnapshot.self, forKey: .bbox)
+            ?? legacy.decodeIfPresent(BBoxSnapshot.self, forKey: .bbox)
+            ?? alternate.decode(BBoxSnapshot.self, forKey: .bbox)
         note = try container.decodeIfPresent(String.self, forKey: .note)
             ?? legacy.decodeIfPresent(String.self, forKey: .note)
+            ?? alternate.decodeIfPresent(String.self, forKey: .note)
     }
 }
 

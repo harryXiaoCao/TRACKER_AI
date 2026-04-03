@@ -1,0 +1,5 @@
+frame_index,time_s,x_px,y_px,raw_x_units,raw_y_units,x_units,y_units,vx,vy,ax,ay,speed,acceleration_magnitude,angle_deg,confidence,scientific_confidence,position_uncertainty,velocity_uncertainty,acceleration_uncertainty,lost,corrected,state,failure_reason
+3,0.15,12,24,0.05,0.225,0.05,0.225,0,0,0,0,0,0,0,0.95,0.948,0.004,0,0,false,false,"tracking",""
+4,0.2,17,25,0.175,0.2,0.175,0.2,2.5,-0.5,0.15,-0.1,2.5495,0.1803,-11.3099,0.92,0.912,0.016,0.055,0.02,false,false,"tracking",""
+5,0.25,23,27,0.325,0.1625,0.325,0.1625,3,-0.75,0.4,-0.36,3.9051,0.5385,-14.0362,0.88,0.76,0.04,0.12,0.06,true,false,"lost","occluded"
+6,0.3,27,30,0.425,0.1,0.425,0.1,2,-1.25,-0.8,-0.9,2.9155,1.1402,-32.0054,0.9,0.77,0.06,0.22,0.08,false,true,"reacquired","manual_correction"
