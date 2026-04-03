@@ -7,22 +7,22 @@ struct HelpCenterView: View {
         TrackerPanel {
             VStack(alignment: .leading, spacing: 14) {
                 SectionEyebrow(text: "Commercialization Notes")
-                Text("Tracker AI now runs its analysis bundle through a native macOS coordinator, while the Python bridge remains for legacy session and bundle compatibility.")
+                Text("Tracker AI now ships its analysis flow as a native macOS workflow, while the compatibility bridge remains limited to legacy session and bundle formats.")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(TrackerTheme.ink)
                 Text("""
                 Native readiness in this package:
                 • SwiftUI/AppKit shell for overview, setup, review, and results
-                • Workspace/session loading from the existing Python JSON formats
+                • Workspace/session loading from the existing research JSON formats
                 • Native tracking, scientific processing, and bundle export coordination
                 • Legacy bundle reload through the compatibility bridge after native export
+                • Security-scoped file access aligned with App Sandbox user-selected documents
                 • Charts, event journaling, reproducibility, and commercialization-oriented IA
-                • Secondary-object, correction-anchor, and export-profile parity from the Python session model
+                • Secondary-object, correction-anchor, and export-profile parity from the established session model
 
                 Still recommended before broad public launch:
-                • Replace numeric target/scale entry with native video drawing tools
-                • Port correction replay and the remaining review/setup parity items
-                • Add signing, notarization, sandboxing, crash reporting, analytics, and onboarding
+                • Continue polish on setup/review UX and document-based reopening flows
+                • Add signing, notarization, crash reporting, analytics, and onboarding
                 • Finalize an Xcode-based release pipeline once the local Apple toolchain is healthy
                 """)
                 .font(.system(size: 14))

@@ -102,7 +102,9 @@ final class ReferenceMarkerWorkflowTests: XCTestCase {
         XCTAssertEqual(savedSession.referenceBbox?.height, 30)
 
         let reproduceCommand = try String(contentsOf: outputDirectory.appendingPathComponent("reproduce_command.sh"), encoding: .utf8)
-        XCTAssertTrue(reproduceCommand.contains("--reference-bbox 14 16 28 30"))
+        XCTAssertTrue(reproduceCommand.contains("Reference marker bbox: 14 16 28 30"))
+        XCTAssertTrue(reproduceCommand.contains("open -a TrackerAI"))
+        XCTAssertFalse(reproduceCommand.contains("python3"))
 
         let reportMarkdown = try String(contentsOf: outputDirectory.appendingPathComponent("report.md"), encoding: .utf8)
         XCTAssertTrue(reportMarkdown.contains("Reference marker enabled: `true`"))

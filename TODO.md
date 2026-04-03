@@ -27,7 +27,7 @@ This repository is in a real hybrid state, not an early prototype:
 
 - The Python app under `src/tracker_ai` is still the scientific engine of record.
 - The native macOS app under `Sources/TrackerAIMac` already owns the product shell, direct-on-video drawing workflow, session/workspace loading and saving, results browsing, and native research export/report generation.
-- `Sources/TrackerAIMac/Core/PythonEngineBridge.swift` still launches `python3 -m tracker_ai.cli analyze` for actual analysis runs.
+- `Sources/TrackerAIMac/Core/PythonEngineBridge.swift` is now limited to compatibility loading/saving for legacy JSON and exported bundles; the shipping app no longer shells out to `/usr/bin/python3`.
 - The Swift side already reconstructs a lot of post-analysis science natively:
   - smoothing and derived kinematics
   - QC summaries
@@ -246,10 +246,11 @@ The goal of the next migration phase should be to eliminate `PythonEngineBridge.
 
 ### 21. Remove App Store blockers caused by the embedded Python dependency
 
-- [ ] Eliminate runtime dependence on invoking `/usr/bin/python3` from the shipping app path.
-- [ ] Remove any product requirement for a local Python environment, Conda environment, or editable install.
-- [ ] Confirm all research exports can be generated from the native app alone.
-- [ ] Review sandbox, entitlements, and file access with the Python runtime removed from the critical path.
+- [x] Eliminate runtime dependence on invoking `/usr/bin/python3` from the shipping app path.
+- [x] Remove any product requirement for a local Python environment, Conda environment, or editable install.
+- [x] Confirm all research exports can be generated from the native app alone.
+- [x] Review sandbox, entitlements, and file access with the Python runtime removed from the critical path.
+  App Store blocker cleanup is now in place across the product path: the Swift app surfaces native reproduction/export instructions instead of Python CLI commands, research bundles and saved workspace/session entries preserve security-scoped bookmark metadata for sandbox-safe reopen, the Xcode target now enables App Sandbox with user-selected read/write access, the README/product guidance makes the native macOS build the supported app path while clearly downgrading Conda/PyInstaller tooling to legacy compatibility work, and regression coverage now includes bookmark-metadata + native reproduction workflow checks in `tests/TrackerAIMacTests/MigrationBacklog21Tests.swift`. Verification passed through the full `swift test` suite and a successful `bash scripts/build_native_macos_app.sh` release build.
 
 ### 22. Harden packaging, signing, and distribution around the native-only app
 
@@ -278,5 +279,5 @@ The Python-to-Swift transformation is only truly complete when all of the follow
 - [ ] Existing session/workspace JSON files still load correctly.
 - [ ] Native results match Python closely enough on synthetic tests and benchmark clips.
 - [ ] Native batch execution replaces `tracker_ai cli batch` for product usage.
-- [ ] The shipping app no longer depends on a local Python runtime.
+- [x] The shipping app no longer depends on a local Python runtime.
 - [ ] A Swift regression suite exists for the core scientific pipeline.

@@ -728,8 +728,9 @@ struct NativeResearchBundleExporter {
             trackID: payload.trackID,
             classification: classification
         )
-        let reproduceCommand = buildReproduceCommand(
+        let reproduceCommand = NativeReproductionWorkflow.build(
             session: payload.session,
+            outputDirectory: directory,
             trackingProfile: payload.trackingProfile,
             includeOverlay: payload.includeOverlay,
             includePlots: payload.includePlots,
@@ -749,11 +750,12 @@ struct NativeResearchBundleExporter {
             reproduceCommand: reproduceCommand
         )
 
-        let sessionWithNativeScience = reporter.sessionByUpdatingDerivedArtifacts(
+        var sessionWithNativeScience = reporter.sessionByUpdatingDerivedArtifacts(
             payload.session,
             derivedEvents: mergedEvents,
             trackQuality: reporter.resolvedTrackQuality(session: payload.session, rows: payload.analysisRows, trackID: payload.trackID)
         )
+        sessionWithNativeScience.bundleDirectoryBookmarkData = SecurityScopedBookmarks.makeBookmark(for: directory)
         let sessionURL = directory.appendingPathComponent("session.json")
         let manifestURL = directory.appendingPathComponent("experiment_manifest.json")
         let eventsURL = directory.appendingPathComponent("events.csv")
@@ -985,73 +987,6 @@ struct NativeResearchBundleExporter {
         scientificProcessor.summarizeWindow(rows: rows, startFrame: startFrame, endFrame: endFrame)
     }
 
-    private func buildReproduceCommand(
-        session: SessionSnapshot,
-        trackingProfile: TrackingProfileOption,
-        includeOverlay: Bool,
-        includePlots: Bool,
-        debugTracking: Bool
-    ) -> String {
-        let points = (session.scalePoints ?? [0, 0, session.calibration.pixelDistance, 0])
-            .map { String(format: "%g", $0) }
-            .joined(separator: " ")
-        let bbox = session.initialBbox
-        var command = [
-            "tracker-ai",
-            "analyze",
-            "--video \"\(session.videoPath)\"",
-            "--bbox \(format(bbox.x)) \(format(bbox.y)) \(format(bbox.width)) \(format(bbox.height))",
-            "--scale-points \(points)",
-            "--reference-length \(format(session.calibration.referenceLength))",
-            "--unit \(session.calibration.unitLabel)",
-            "--start-frame \(session.selectedStartFrame ?? 0)",
-            "--window \(session.analysisConfig.smoothingWindow)",
-            "--polyorder \(session.analysisConfig.smoothingPolyorder)",
-            "--tracking-profile \(trackingProfile.rawValue)",
-            "--report-template \(session.exportPreferences?.reportTemplate ?? "research")",
-        ]
-
-        if let end = session.selectedEndFrame {
-            command.append("--end-frame \(end)")
-        }
-        if let referenceBox = session.referenceBbox {
-            command.append("--reference-bbox \(format(referenceBox.x)) \(format(referenceBox.y)) \(format(referenceBox.width)) \(format(referenceBox.height))")
-        }
-        if !includeOverlay {
-            command.append("--skip-overlay")
-        }
-        if !includePlots {
-            command.append("--skip-plots")
-        }
-        if debugTracking {
-            command.append("--debug-tracking")
-        }
-        if let metadata = session.metadata {
-            if let label = metadata.experimentLabel, !label.isEmpty {
-                command.append("--experiment-label \"\(escapeShell(label))\"")
-            }
-            if let trialID = metadata.trialID, !trialID.isEmpty {
-                command.append("--trial-id \"\(escapeShell(trialID))\"")
-            }
-            if let operatorName = metadata.operatorName, !operatorName.isEmpty {
-                command.append("--operator \"\(escapeShell(operatorName))\"")
-            }
-            if let notes = metadata.notes, !notes.isEmpty {
-                command.append("--notes \"\(escapeShell(notes))\"")
-            }
-            if let tags = metadata.tags, !tags.isEmpty {
-                command.append("--tags " + tags.map { "\"\(escapeShell($0))\"" }.joined(separator: " "))
-            }
-        }
-        for object in session.additionalObjects ?? [] {
-            command.append(
-                "--extra-object \(object.trackID) \"\(escapeShell(object.name))\" \(format(object.bbox.x)) \(format(object.bbox.y)) \(format(object.bbox.width)) \(format(object.bbox.height))"
-            )
-        }
-        command.append("--output-dir <output-dir>")
-        return command.joined(separator: " \\\n  ")
-    }
-
     private func buildEventsCSV(_ events: [EventMarkerRecord]) -> String {
         var lines = ["name,frame_index,time_s,value,unit_label,axis,note,origin"]
         lines.append(contentsOf: events.map {
@@ -1147,10 +1082,6 @@ struct NativeResearchBundleExporter {
     private func formatOptional(_ value: Double?) -> String {
         guard let value else { return "" }
         return format(value)
-    }
-
-    private func escapeShell(_ value: String) -> String {
-        value.replacingOccurrences(of: "\"", with: "\\\"")
     }
 }
 
@@ -1614,6 +1545,8 @@ struct NativeResearchReporter {
         }
         return SessionSnapshot(
             videoPath: session.videoPath,
+            videoBookmarkData: session.videoBookmarkData,
+            bundleDirectoryBookmarkData: session.bundleDirectoryBookmarkData,
             initialBbox: session.initialBbox,
             calibration: session.calibration,
             analysisConfig: session.analysisConfig,

@@ -159,7 +159,9 @@ struct ResearchPreset: Identifiable, Hashable {
 struct WorkspaceClip: Identifiable, Hashable, Codable {
     var label: String
     var videoPath: String
+    var videoBookmarkData: String? = nil
     var sessionPath: String = ""
+    var sessionBookmarkData: String? = nil
     var notes: String = ""
 
     var id: String { videoPath }
@@ -449,6 +451,8 @@ struct WorkspaceSnapshot: Codable {
 
 struct SessionSnapshot: Codable {
     var videoPath: String
+    var videoBookmarkData: String? = nil
+    var bundleDirectoryBookmarkData: String? = nil
     var initialBbox: BBoxSnapshot
     var calibration: CalibrationSnapshot
     var analysisConfig: AnalysisConfigSnapshot

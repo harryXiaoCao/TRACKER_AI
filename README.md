@@ -1,8 +1,9 @@
 # Tracker AI
 
-Tracker AI is a Python desktop application for 2D planar motion analysis from video.
-It combines a hybrid single-object tracker with calibration, smoothing, and physics-ready
-kinematics export.
+Tracker AI is a native macOS application for 2D planar motion analysis from video.
+It combines native video tracking, calibration, review tooling, and research-ready
+exports for classroom and lab workflows, while still preserving compatibility with
+legacy session and bundle formats from the earlier Python tooling.
 
 ## Current Release-Candidate Track
 
@@ -15,7 +16,35 @@ kinematics export.
 - Export CSV, plots, overlay video, report stub, and reusable session files
 - Launch a Qt desktop shell when `PySide6` and `pyqtgraph` are installed
 
-## Install
+## Native macOS App
+
+Primary local build path:
+
+```bash
+bash scripts/build_native_macos_app.sh
+```
+
+Primary product-work path in Xcode:
+
+```bash
+open macos/TrackerAI/TrackerAI.xcodeproj
+```
+
+Suggested in-app workflow:
+
+1. Open a video.
+2. Step to the best setup frame and click `Use This Frame`.
+3. Click `Draw Scale` and drag the calibration line.
+4. Click `Draw Target` and drag the object box.
+5. Click `Run Analysis`.
+6. If tracking drifts, step to the failure frame, click `Draw Correction`, redraw the box, then click `Apply Correction`.
+7. Click `Export Bundle`.
+
+The native app no longer requires a local Python environment, Conda environment, or editable install to run analysis or generate research exports.
+
+## Legacy Python Tooling
+
+The repository still contains the legacy Python CLI and regression harness for compatibility checks and historical workflows.
 
 ```bash
 python3 -m venv .venv
@@ -45,22 +74,6 @@ This exports:
 - `plots/velocity.png`
 - `plots/acceleration.png`
 
-## Run the Desktop App
-
-```bash
-tracker-ai-ui
-```
-
-Suggested in-app workflow:
-
-1. Open a video.
-2. Step to the best setup frame and click `Use This Frame`.
-3. Click `Draw Scale` and drag the calibration line.
-4. Click `Draw Target` and drag the object box.
-5. Click `Run Analysis`.
-6. If tracking drifts, step to the failure frame, click `Draw Correction`, redraw the box, then click `Apply Correction`.
-7. Click `Export Bundle`.
-
 ## Conda Setup
 
 ```bash
@@ -86,17 +99,13 @@ tracker-ai analyze \
   --output-dir outputs/sample_run
 ```
 
-## macOS Packaging
+## Legacy macOS Packaging
 
-The project now includes a release-candidate packaging path for macOS:
+The historical PyInstaller path is still available for compatibility work only:
 
 ```bash
 bash scripts/build_macos_app.sh
 ```
-
-Expected artifact:
-
-- `dist/TrackerAI.app`
 
 ## Native macOS Commercialization Track
 
@@ -116,29 +125,12 @@ architecture:
 Current native architecture:
 
 - SwiftUI/AppKit handles the product shell and desktop workflow
-- The existing Python engine remains the transitional analysis backend
+- Native tracking, scientific processing, export generation, and batch coordination now run inside the Swift app
 - Session JSON, workspace JSON, and export bundles can be loaded directly into
-  the native app model
+  the native app model for compatibility
 - Native exports now preserve richer session state, manual events, correction anchors,
   and summary/quality/report artifacts inside standard bundle filenames
-
-Intended local run path once a healthy Apple toolchain is available:
-
-```bash
-swift run TrackerAIMac
-```
-
-Intended Xcode-native path for product work:
-
-```bash
-open macos/TrackerAI/TrackerAI.xcodeproj
-```
-
-Command-line native build path once full Xcode is installed and selected:
-
-```bash
-bash scripts/build_native_macos_app.sh
-```
+- Security-scoped bookmarks keep user-selected files and export directories compatible with App Sandbox
 
 If `xcodebuild` reports that the active developer directory points at Command
 Line Tools, install full Xcode and switch with `xcode-select` before using the
@@ -153,18 +145,13 @@ The Xcode project is organized for the commercialization transition:
 
 Recommended commercialization roadmap:
 
-1. Keep the Python CLI as the scientific engine during product iteration.
-2. Replace numeric setup entry with native drawing and annotation tools.
-3. Keep porting session parity features from the Python app one workflow at a
-   time, including multi-object setup, correction review, and export policy.
-4. Move tracking/runtime-critical logic into native modules or a hardened
-   embedded service boundary.
-5. Add signing, notarization, crash reporting, onboarding, licensing, and
-   update delivery for public distribution.
+1. Keep refining native setup/review/document workflows around the now-native engine.
+2. Finish release hardening for signing, notarization, crash reporting, onboarding, licensing, and update delivery.
+3. Preserve compatibility import coverage for legacy JSON/session artifacts while retiring unsupported Python-era packaging assumptions.
 
 ## Notes
 
-- The desktop UI is local-first and uses the same analysis engine as the CLI.
+- The native macOS app is now the primary product surface and can generate research exports without a Python runtime.
 - v1 assumes planar motion and a manually defined scale.
 - The current release candidate prioritizes guided interaction and manual correction over full automation.
 - The tracking core is designed to stay modular so detector-assisted recovery can be added later

@@ -26,6 +26,11 @@
 		A10000000000000000000011 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000014 /* Assets.xcassets */; };
 		A10000000000000000000012 /* CalibrationProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000018 /* CalibrationProfile.swift */; };
 		A10000000000000000000013 /* NativeVideoSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000019 /* NativeVideoSource.swift */; };
+		A10000000000000000000014 /* SecurityScopedAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001A /* SecurityScopedAccess.swift */; };
+		A10000000000000000000015 /* NativeReproductionWorkflow.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001B /* NativeReproductionWorkflow.swift */; };
+		A10000000000000000000016 /* NativeTrackingRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001C /* NativeTrackingRuntime.swift */; };
+		A10000000000000000000017 /* NativeAnalysisCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001D /* NativeAnalysisCoordinator.swift */; };
+		A10000000000000000000018 /* NativeBatchCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001E /* NativeBatchCoordinator.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -54,6 +59,11 @@
 		B10000000000000000000017 /* TrackerAI.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TrackerAI.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B10000000000000000000018 /* CalibrationProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/TrackerAIMac/Core/CalibrationProfile.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000019 /* NativeVideoSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/TrackerAIMac/Core/NativeVideoSource.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000001A /* SecurityScopedAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/TrackerAIMac/Core/SecurityScopedAccess.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000001B /* NativeReproductionWorkflow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/TrackerAIMac/Core/NativeReproductionWorkflow.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000001C /* NativeTrackingRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/TrackerAIMac/Core/NativeTrackingRuntime.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000001D /* NativeAnalysisCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/TrackerAIMac/Core/NativeAnalysisCoordinator.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000001E /* NativeBatchCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/TrackerAIMac/Core/NativeBatchCoordinator.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -98,6 +108,11 @@
 					B10000000000000000000006 /* NativeResearchExports.swift */,
 					B10000000000000000000018 /* CalibrationProfile.swift */,
 					B10000000000000000000019 /* NativeVideoSource.swift */,
+					B1000000000000000000001A /* SecurityScopedAccess.swift */,
+					B1000000000000000000001B /* NativeReproductionWorkflow.swift */,
+					B1000000000000000000001C /* NativeTrackingRuntime.swift */,
+					B1000000000000000000001D /* NativeAnalysisCoordinator.swift */,
+					B1000000000000000000001E /* NativeBatchCoordinator.swift */,
 				);
 				path = Core;
 			sourceTree = "<group>";
@@ -265,6 +280,11 @@
 				A10000000000000000000010 /* FormComponents.swift in Sources */,
 				A10000000000000000000012 /* CalibrationProfile.swift in Sources */,
 				A10000000000000000000013 /* NativeVideoSource.swift in Sources */,
+				A10000000000000000000014 /* SecurityScopedAccess.swift in Sources */,
+				A10000000000000000000015 /* NativeReproductionWorkflow.swift in Sources */,
+				A10000000000000000000016 /* NativeTrackingRuntime.swift in Sources */,
+				A10000000000000000000017 /* NativeAnalysisCoordinator.swift in Sources */,
+				A10000000000000000000018 /* NativeBatchCoordinator.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

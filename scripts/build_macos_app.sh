@@ -11,9 +11,9 @@ if ! command -v conda >/dev/null 2>&1; then
 fi
 
 echo "Building Tracker AI macOS release candidate..."
+echo "This is the legacy Python/PyInstaller packaging path kept for compatibility work."
 conda run -n tracker-ai python -m pip install -e .[release]
 conda run -n tracker-ai pyinstaller --clean --noconfirm packaging/TrackerAI.spec
 
 echo "Build complete:"
 echo "  $ROOT_DIR/dist/TrackerAI.app"
-

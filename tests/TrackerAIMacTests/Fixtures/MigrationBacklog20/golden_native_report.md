@@ -38,30 +38,23 @@
 ## Reproduce This Run
 
 ```bash
-tracker-ai \
-  analyze \
-  --video "/tmp/golden-video.mp4" \
-  --bbox 12 24 28 22 \
-  --scale-points 10 20 90 20 \
-  --reference-length 2 \
-  --unit m \
-  --start-frame 3 \
-  --window 5 \
-  --polyorder 2 \
-  --tracking-profile marker \
-  --report-template research \
-  --end-frame 18 \
-  --reference-bbox 100 32 18 18 \
-  --skip-overlay \
-  --skip-plots \
-  --debug-tracking \
-  --experiment-label "Golden Fixture Experiment" \
-  --trial-id "trial-golden-01" \
-  --operator "Codex" \
-  --notes "Fixture-backed migration regression" \
-  --tags "golden" "native" "migration" \
-  --extra-object secondary_1 "Secondary Marker" 42 40 14 14 \
-  --output-dir <output-dir>
+# Native TrackerAI reproduction workflow
+# 1. Launch TrackerAI.app.
+# 2. Load the bundled session file shown below.
+# 3. Confirm the source video resolves in the Setup workspace.
+# 4. Run analysis or export a fresh research bundle to a new directory.
+#
+# Session file: ./session.json
+# Source video: /tmp/golden-video.mp4
+# Tracking profile: marker
+# Smoothing: window 5, polyorder 2
+# Include overlay: false
+# Include plots: false
+# Debug tracking: true
+# Reference marker bbox: 100 32 18 18
+# Experiment label: Golden Fixture Experiment
+# Trial ID: trial-golden-01
+open -a TrackerAI
 ```
 ## Experiment Classification
 

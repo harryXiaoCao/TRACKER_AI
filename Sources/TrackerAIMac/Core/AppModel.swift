@@ -10,7 +10,7 @@ final class AppModel {
     var selectedTab: LabTab = .overview
     var selectedResultsTab: ResultsSubtab = .insights
     var engineState: EngineState = .ready
-    var statusMessage = "Native shell ready. Import a video or load a Python session to begin."
+    var statusMessage = "Native shell ready. Import a video or load a saved session to begin."
     var selectionMessage = "Choose a preset, then calibrate and define the target box."
     var analysisProgressFraction = 0.0
 
@@ -98,7 +98,7 @@ final class AppModel {
     var reportMarkdown = ""
     var exportDirectory: URL?
     var nativeBundleDirectory: URL?
-    var reproduceCommand = "python3 -m tracker_ai.cli analyze ..."
+    var reproduceCommand = "# Native TrackerAI reproduction workflow\nopen -a TrackerAI"
     var summarySnapshot: SummarySnapshot?
     var qualitySnapshot: QualitySnapshot?
     var analyzerSnapshots: [AnalyzerSnapshot] = []
@@ -134,6 +134,8 @@ final class AppModel {
     private let analysisCoordinator = NativeAnalysisCoordinator()
     private let batchCoordinator = NativeBatchCoordinator()
     private var currentVideoSource: NativeVideoSource?
+    private var currentVideoBookmarkData: String?
+    private var currentVideoAccessLease: SecurityScopedURLLease?
     private var pendingVideoLoadID = UUID()
     private var internalTrackingConfig = TrackingConfigSnapshot.pythonDefaults
     @ObservationIgnored private var analysisRunTask: Task<AnalysisLoadResult, Error>?
@@ -144,6 +146,52 @@ final class AppModel {
 
     var selectedPreset: ResearchPreset {
         presets.first(where: { $0.id == selectedPresetID }) ?? presets[0]
+    }
+
+    private func nativeReproducePlaceholder() -> String {
+        "# Native TrackerAI reproduction workflow\nopen -a TrackerAI"
+    }
+
+    private func bookmarkForVideoURL(_ url: URL) -> String? {
+        SecurityScopedBookmarks.makeBookmark(for: url)
+    }
+
+    private func bookmarkForSessionURL(_ url: URL) -> String? {
+        SecurityScopedBookmarks.makeDirectoryBookmark(for: url)
+    }
+
+    private func bookmarkForBundleDirectory(_ url: URL) -> String? {
+        SecurityScopedBookmarks.makeBookmark(for: url)
+    }
+
+    private func loadSessionSnapshot(from url: URL, accessBookmark: String?) throws -> SessionSnapshot {
+        let accessLease = SecurityScopedBookmarks.access(url: url, bookmark: accessBookmark)
+        defer { _ = accessLease }
+        return try engine.loadSession(from: url)
+    }
+
+    private func loadWorkspaceSnapshot(from url: URL, accessBookmark: String?) throws -> WorkspaceSnapshot {
+        let accessLease = SecurityScopedBookmarks.access(url: url, bookmark: accessBookmark)
+        defer { _ = accessLease }
+        return try engine.loadWorkspace(from: url)
+    }
+
+    private func saveSessionSnapshot(_ snapshot: SessionSnapshot, to url: URL, accessBookmark: String?) throws {
+        let accessLease = SecurityScopedBookmarks.access(url: url, bookmark: accessBookmark)
+        defer { _ = accessLease }
+        try engine.saveSession(snapshot, to: url)
+    }
+
+    private func saveWorkspaceSnapshot(_ snapshot: WorkspaceSnapshot, to url: URL, accessBookmark: String?) throws {
+        let accessLease = SecurityScopedBookmarks.access(url: url, bookmark: accessBookmark)
+        defer { _ = accessLease }
+        try engine.saveWorkspace(snapshot, to: url)
+    }
+
+    private func loadAnalysisBundle(at directory: URL, accessBookmark: String?) throws -> AnalysisLoadResult {
+        let accessLease = SecurityScopedBookmarks.access(url: directory, bookmark: accessBookmark)
+        defer { _ = accessLease }
+        return try engine.loadBundle(from: directory)
     }
 
     var currentTrialHeadline: String {
@@ -319,13 +367,14 @@ final class AppModel {
         reportTemplate = preset.reportTemplate
         selectionMessage = preset.reviewFocus
         statusMessage = "Applied preset: \(preset.title)"
-        reproduceCommand = "python3 -m tracker_ai.cli analyze --tracking-profile \(preset.trackingProfile.rawValue) --window \(preset.smoothingWindow) --polyorder \(preset.polyorder) --report-template \(preset.reportTemplate) ..."
+        reproduceCommand = nativeReproducePlaceholder()
     }
 
     func openVideo() {
         guard let url = FilePanels.openVideo() else { return }
-        loadVideo(url)
-        addOrActivateWorkspaceClip(videoURL: url, sessionPath: "")
+        let videoBookmark = bookmarkForVideoURL(url)
+        loadVideo(url, bookmark: videoBookmark)
+        addOrActivateWorkspaceClip(videoURL: url, videoBookmark: videoBookmark, sessionPath: "", sessionBookmark: nil)
         selectedTab = .setup
         statusMessage = "Loaded \(url.lastPathComponent)"
         selectionMessage = "Define the range, calibration line, and target box before running analysis."
@@ -334,9 +383,21 @@ final class AppModel {
     func loadSession() {
         guard let url = FilePanels.openJSON(title: "Load Tracker Session") else { return }
         do {
-            let snapshot = try engine.loadSession(from: url)
-            apply(session: snapshot, sessionURL: url, loadBundle: true)
-            addOrActivateWorkspaceClip(videoURL: URL(fileURLWithPath: snapshot.videoPath), sessionPath: url.path)
+            let sessionBookmark = bookmarkForSessionURL(url)
+            let snapshot = try loadSessionSnapshot(from: url, accessBookmark: sessionBookmark)
+            apply(
+                session: snapshot,
+                sessionURL: url,
+                loadBundle: true,
+                sessionAccessBookmark: sessionBookmark,
+                bundleAccessBookmark: snapshot.bundleDirectoryBookmarkData ?? sessionBookmark
+            )
+            addOrActivateWorkspaceClip(
+                videoURL: URL(fileURLWithPath: snapshot.videoPath),
+                videoBookmark: snapshot.videoBookmarkData,
+                sessionPath: url.path,
+                sessionBookmark: snapshot.bundleDirectoryBookmarkData ?? sessionBookmark
+            )
             selectedTab = .overview
             statusMessage = "Loaded session \(url.lastPathComponent)"
         } catch {
@@ -347,7 +408,8 @@ final class AppModel {
     func loadWorkspace() {
         guard let url = FilePanels.openJSON(title: "Load Tracker Workspace") else { return }
         do {
-            let snapshot = try engine.loadWorkspace(from: url)
+            let workspaceBookmark = bookmarkForSessionURL(url)
+            let snapshot = try loadWorkspaceSnapshot(from: url, accessBookmark: workspaceBookmark)
             workspaceClips = snapshot.items
             if let active = workspaceClips.first(where: { $0.videoPath == snapshot.activeVideoPath }) ?? workspaceClips.first {
                 activateWorkspaceClip(active)
@@ -366,7 +428,7 @@ final class AppModel {
                 activeVideoPath: currentVideoURL?.path ?? "",
                 items: workspaceClips
             )
-            try engine.saveWorkspace(snapshot, to: url)
+            try saveWorkspaceSnapshot(snapshot, to: url, accessBookmark: bookmarkForSessionURL(url))
             statusMessage = "Saved workspace to \(url.lastPathComponent)"
         } catch {
             statusMessage = error.localizedDescription
@@ -384,9 +446,16 @@ final class AppModel {
         }
         guard let url = FilePanels.saveJSON(title: "Save Tracker Session", suggestedName: "tracker-session.json") else { return }
         do {
-            let snapshot = try buildSessionSnapshot(videoURL: videoURL)
-            try engine.saveSession(snapshot, to: url)
-            addOrActivateWorkspaceClip(videoURL: videoURL, sessionPath: url.path)
+            let sessionBookmark = bookmarkForSessionURL(url)
+            var snapshot = try buildSessionSnapshot(videoURL: videoURL)
+            snapshot.bundleDirectoryBookmarkData = sessionBookmark
+            try saveSessionSnapshot(snapshot, to: url, accessBookmark: sessionBookmark)
+            addOrActivateWorkspaceClip(
+                videoURL: videoURL,
+                videoBookmark: snapshot.videoBookmarkData,
+                sessionPath: url.path,
+                sessionBookmark: sessionBookmark
+            )
             statusMessage = "Saved native session to \(url.lastPathComponent)"
         } catch {
             statusMessage = error.localizedDescription
@@ -400,6 +469,8 @@ final class AppModel {
         }
         guard let directory = FilePanels.chooseDirectory(title: "Choose Native Research Package Directory") else { return }
         do {
+            let outputAccessLease = SecurityScopedBookmarks.access(url: directory, bookmark: bookmarkForBundleDirectory(directory))
+            defer { _ = outputAccessLease }
             let session = try buildSessionSnapshot(videoURL: videoURL)
             let payload = NativeResearchBundlePayload(
                 session: session,
@@ -435,6 +506,8 @@ final class AppModel {
         guard let outputRoot = FilePanels.chooseDirectory(title: "Choose Native Batch Export Directory") else { return }
 
         do {
+            let outputAccessLease = SecurityScopedBookmarks.access(url: outputRoot, bookmark: bookmarkForBundleDirectory(outputRoot))
+            defer { _ = outputAccessLease }
             let sessions = try collectBatchSessions()
             guard !sessions.isEmpty else {
                 statusMessage = NativeResearchExportError.emptyWorkspaceBatch.localizedDescription
@@ -480,11 +553,18 @@ final class AppModel {
 
     func activateWorkspaceClip(_ clip: WorkspaceClip) {
         let videoURL = URL(fileURLWithPath: clip.videoPath)
-        loadVideo(videoURL)
+        loadVideo(videoURL, bookmark: clip.videoBookmarkData)
         if !clip.sessionPath.isEmpty, FileManager.default.fileExists(atPath: clip.sessionPath) {
             do {
-                let snapshot = try engine.loadSession(from: URL(fileURLWithPath: clip.sessionPath))
-                apply(session: snapshot, sessionURL: URL(fileURLWithPath: clip.sessionPath), loadBundle: true)
+                let sessionURL = URL(fileURLWithPath: clip.sessionPath)
+                let snapshot = try loadSessionSnapshot(from: sessionURL, accessBookmark: clip.sessionBookmarkData)
+                apply(
+                    session: snapshot,
+                    sessionURL: sessionURL,
+                    loadBundle: true,
+                    sessionAccessBookmark: clip.sessionBookmarkData,
+                    bundleAccessBookmark: snapshot.bundleDirectoryBookmarkData ?? clip.sessionBookmarkData
+                )
             } catch {
                 statusMessage = "Loaded clip, but session parsing failed: \(error.localizedDescription)"
             }
@@ -1186,6 +1266,9 @@ final class AppModel {
             return
         }
         guard let directory = FilePanels.chooseDirectory(title: "Choose Analysis Export Directory") else { return }
+        let outputDirectoryBookmark = bookmarkForBundleDirectory(directory)
+        let outputAccessLease = SecurityScopedBookmarks.access(url: directory, bookmark: outputDirectoryBookmark)
+        defer { _ = outputAccessLease }
         analysisRunTask?.cancel()
         analysisProgressFraction = 0
         engineState = .running
@@ -1267,12 +1350,19 @@ final class AppModel {
         statusMessage = "Canceling native analysis..."
     }
 
-    func apply(session: SessionSnapshot, sessionURL: URL, loadBundle: Bool) {
+    func apply(
+        session: SessionSnapshot,
+        sessionURL: URL,
+        loadBundle: Bool,
+        sessionAccessBookmark: String? = nil,
+        bundleAccessBookmark: String? = nil
+    ) {
         experimentLabel = session.metadata?.experimentLabel ?? experimentLabel
         trialID = session.metadata?.trialID ?? trialID
         operatorName = session.metadata?.operatorName ?? operatorName
         notes = session.metadata?.notes ?? notes
         tags = (session.metadata?.tags ?? []).joined(separator: ", ")
+        currentVideoBookmarkData = session.videoBookmarkData ?? currentVideoBookmarkData
 
         if let start = session.selectedStartFrame { startFrame = start }
         if let end = session.selectedEndFrame { endFrame = end }
@@ -1384,7 +1474,8 @@ final class AppModel {
         refreshReviewQueue(trackQuality: sessionTrackQuality)
 
         let bundleDirectory = sessionURL.deletingLastPathComponent()
-        let loadedBundle = loadBundle ? (try? engine.loadBundle(from: bundleDirectory)) : nil
+        let effectiveBundleBookmark = bundleAccessBookmark ?? session.bundleDirectoryBookmarkData ?? sessionAccessBookmark
+        let loadedBundle = loadBundle ? (try? loadAnalysisBundle(at: bundleDirectory, accessBookmark: effectiveBundleBookmark)) : nil
         if let loadedBundle {
             apply(loadResult: loadedBundle)
         } else if loadBundle {
@@ -1415,12 +1506,20 @@ final class AppModel {
             ]
         }
         if FileManager.default.fileExists(atPath: session.videoPath) {
-            loadVideo(URL(fileURLWithPath: session.videoPath), resetSelection: false)
+            loadVideo(
+                URL(fileURLWithPath: session.videoPath),
+                bookmark: session.videoBookmarkData ?? currentVideoBookmarkData,
+                resetSelection: false
+            )
         }
-        let overlayFlag = includeOverlay ? "" : " --skip-overlay"
-        let plotFlag = includePlots ? "" : " --skip-plots"
-        let debugFlag = debugTracking ? " --debug-tracking" : ""
-        reproduceCommand = "python3 -m tracker_ai.cli analyze --video \(session.videoPath) --output-dir \(bundleDirectory.path)\(overlayFlag)\(plotFlag)\(debugFlag) --report-template \(reportTemplate)"
+        reproduceCommand = NativeReproductionWorkflow.build(
+            session: session,
+            outputDirectory: bundleDirectory,
+            trackingProfile: session.trackingConfig?.profile ?? trackingProfile,
+            includeOverlay: session.exportPreferences?.includeOverlay ?? includeOverlay,
+            includePlots: session.exportPreferences?.includePlots ?? includePlots,
+            debugTracking: session.exportPreferences?.includeDebugTracking ?? debugTracking
+        )
     }
 
     private func apply(loadResult: AnalysisLoadResult) {
@@ -1457,13 +1556,11 @@ final class AppModel {
             apply(
                 session: session,
                 sessionURL: normalizedResult.exportDirectory.appendingPathComponent("session.json"),
-                loadBundle: false
+                loadBundle: false,
+                bundleAccessBookmark: session.bundleDirectoryBookmarkData ?? bookmarkForBundleDirectory(normalizedResult.exportDirectory)
             )
         } else {
-            let overlayFlag = includeOverlay ? "" : " --skip-overlay"
-            let plotFlag = includePlots ? "" : " --skip-plots"
-            let debugFlag = debugTracking ? " --debug-tracking" : ""
-            reproduceCommand = "python3 -m tracker_ai.cli analyze --video \(currentVideoURL?.path ?? "") --output-dir \(normalizedResult.exportDirectory.path)\(overlayFlag)\(plotFlag)\(debugFlag) --report-template \(reportTemplate)"
+            reproduceCommand = nativeReproducePlaceholder()
         }
         if let activeTrackBundle {
             hydrateResults(from: activeTrackBundle)
@@ -1475,12 +1572,28 @@ final class AppModel {
                 .appendingPathComponent("session.json")
                 .path ?? rootSessionPath
             let resolvedSessionPath = FileManager.default.fileExists(atPath: rootSessionPath) ? rootSessionPath : fallbackTrackSessionPath
-            addOrActivateWorkspaceClip(videoURL: currentVideoURL, sessionPath: resolvedSessionPath)
+            addOrActivateWorkspaceClip(
+                videoURL: currentVideoURL,
+                videoBookmark: currentVideoBookmarkData,
+                sessionPath: resolvedSessionPath,
+                sessionBookmark: bookmarkForBundleDirectory(normalizedResult.exportDirectory)
+            )
         }
     }
 
-    private func addOrActivateWorkspaceClip(videoURL: URL, sessionPath: String) {
-        let clip = WorkspaceClip(label: videoURL.deletingPathExtension().lastPathComponent, videoPath: videoURL.path, sessionPath: sessionPath)
+    private func addOrActivateWorkspaceClip(
+        videoURL: URL,
+        videoBookmark: String?,
+        sessionPath: String,
+        sessionBookmark: String?
+    ) {
+        let clip = WorkspaceClip(
+            label: videoURL.deletingPathExtension().lastPathComponent,
+            videoPath: videoURL.path,
+            videoBookmarkData: videoBookmark,
+            sessionPath: sessionPath,
+            sessionBookmarkData: sessionBookmark
+        )
         if let index = workspaceClips.firstIndex(where: { $0.videoPath == clip.videoPath }) {
             workspaceClips[index] = clip
         } else {
@@ -1682,7 +1795,9 @@ final class AppModel {
         player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
     }
 
-    private func loadVideo(_ url: URL, resetSelection: Bool = true) {
+    private func loadVideo(_ url: URL, bookmark: String? = nil, resetSelection: Bool = true) {
+        currentVideoAccessLease = SecurityScopedBookmarks.access(url: url, bookmark: bookmark)
+        currentVideoBookmarkData = bookmark ?? bookmarkForVideoURL(url)
         currentVideoURL = url
         currentVideoSource = nil
         sourceVideoMetadata = nil
@@ -1883,6 +1998,8 @@ final class AppModel {
 
         return SessionSnapshot(
             videoPath: videoURL.path,
+            videoBookmarkData: currentVideoBookmarkData,
+            bundleDirectoryBookmarkData: nativeBundleDirectory.flatMap(bookmarkForBundleDirectory),
             initialBbox: initialBox,
             calibration: calibration,
             analysisConfig: AnalysisConfigSnapshot(
@@ -2197,23 +2314,21 @@ final class AppModel {
     }
 
     private func nativeReproduceCommand(for session: SessionSnapshot, outputDirectory: URL) -> String {
-        let overlayFlag = (session.exportPreferences?.includeOverlay ?? includeOverlay) ? "" : " --skip-overlay"
-        let plotFlag = (session.exportPreferences?.includePlots ?? includePlots) ? "" : " --skip-plots"
-        let trackingConfig = session.resolvedTrackingConfig
-        let debugFlag = (session.exportPreferences?.includeDebugTracking ?? trackingConfig.debugTracking ?? debugTracking) ? " --debug-tracking" : ""
-        let robustRecoveryFlag = (trackingConfig.robustRecovery ?? true) ? "" : " --disable-robust-recovery"
-        let bidirectionalFlag = (trackingConfig.bidirectionalRefinement ?? true) ? "" : " --disable-bidirectional-refinement"
-        let interpolationFlag = (trackingConfig.interpolateShortGaps ?? true) ? "" : " --disable-interpolate-short-gaps"
-        let scaleFactors = (trackingConfig.scaleFactors ?? TrackingConfigSnapshot.pythonDefaults.scaleFactors ?? []).map { String($0) }.joined(separator: " ")
-        let report = session.exportPreferences?.reportTemplate ?? reportTemplate
-        return """
-        python3 -m tracker_ai.cli analyze --video \(session.videoPath) --output-dir \(outputDirectory.path)\(overlayFlag)\(plotFlag)\(debugFlag)\(robustRecoveryFlag)\(bidirectionalFlag)\(interpolationFlag) --report-template \(report) --tracking-profile \((trackingConfig.profile ?? .auto).rawValue) --search-margin \(trackingConfig.searchMargin ?? 2.4) --expanded-search-margin \(trackingConfig.expandedSearchMargin ?? 5.5) --scale-factors \(scaleFactors) --detection-threshold \(trackingConfig.detectionThreshold ?? 0.5) --low-confidence-threshold \(trackingConfig.lowConfidenceThreshold ?? 0.36) --reacquire-threshold \(trackingConfig.reacquireThreshold ?? 0.56) --suspect-after-frames \(trackingConfig.suspectAfterFrames ?? 3) --recovery-after-frames \(trackingConfig.recoveryAfterFrames ?? 5) --max-prediction-frames \(trackingConfig.maxPredictionFrames ?? 8) --template-update-rate \(trackingConfig.templateUpdateRate ?? 0.1) --stable-update-threshold \(trackingConfig.stableUpdateThreshold ?? 0.66) --marker-confidence-bias \(trackingConfig.markerConfidenceBias ?? 0.58) --auto-marker-min-ratio \(trackingConfig.autoMarkerMinRatio ?? 0.12) --max-interpolation-gap \(trackingConfig.maxInterpolationGap ?? 3)
-        """
+        NativeReproductionWorkflow.build(
+            session: session,
+            outputDirectory: outputDirectory,
+            trackingProfile: session.resolvedTrackingConfig.profile ?? trackingProfile,
+            includeOverlay: session.exportPreferences?.includeOverlay ?? includeOverlay,
+            includePlots: session.exportPreferences?.includePlots ?? includePlots,
+            debugTracking: session.exportPreferences?.includeDebugTracking ?? debugTracking
+        )
     }
 
     private func sessionByUpdatingTrackQuality(_ session: SessionSnapshot, trackQuality: TrackQualitySnapshot?) -> SessionSnapshot {
         SessionSnapshot(
             videoPath: session.videoPath,
+            videoBookmarkData: session.videoBookmarkData,
+            bundleDirectoryBookmarkData: session.bundleDirectoryBookmarkData,
             initialBbox: session.initialBbox,
             calibration: session.calibration,
             analysisConfig: session.analysisConfig,
@@ -2506,7 +2621,10 @@ final class AppModel {
 
         for clip in workspaceClips {
             if !clip.sessionPath.isEmpty, FileManager.default.fileExists(atPath: clip.sessionPath) {
-                let snapshot = try engine.loadSession(from: URL(fileURLWithPath: clip.sessionPath))
+                let snapshot = try loadSessionSnapshot(
+                    from: URL(fileURLWithPath: clip.sessionPath),
+                    accessBookmark: clip.sessionBookmarkData
+                )
                 entries.append(NativeBatchSessionEntry(clip: clip, session: snapshot))
                 continue
             }
@@ -2518,7 +2636,11 @@ final class AppModel {
         }
 
         if entries.isEmpty, let currentVideoURL, isTargetReady, isScaleReady {
-            let fallbackClip = WorkspaceClip(label: currentVideoURL.deletingPathExtension().lastPathComponent, videoPath: currentVideoURL.path)
+            let fallbackClip = WorkspaceClip(
+                label: currentVideoURL.deletingPathExtension().lastPathComponent,
+                videoPath: currentVideoURL.path,
+                videoBookmarkData: currentVideoBookmarkData
+            )
             entries.append(NativeBatchSessionEntry(clip: fallbackClip, session: try buildSessionSnapshot(videoURL: currentVideoURL)))
         }
 
@@ -2533,7 +2655,10 @@ final class AppModel {
         }
 
         return NativeRunConfiguration(
-            videoURL: URL(fileURLWithPath: session.videoPath),
+            videoURL: SecurityScopedBookmarks.resolvedFileURL(
+                path: session.videoPath,
+                bookmark: session.videoBookmarkData
+            ),
             outputDirectory: outputDirectory,
             targetBox: BoundingBoxDraft(
                 x: String(session.initialBbox.x),
