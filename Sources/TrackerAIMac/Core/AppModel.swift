@@ -132,6 +132,7 @@ final class AppModel {
     private let nativeTrackingRunner = NativeSingleObjectTrackingRunner()
     private let nativeScientificReporter = NativeResearchReporter()
     private let analysisCoordinator = NativeAnalysisCoordinator()
+    private let batchCoordinator = NativeBatchCoordinator()
     private var currentVideoSource: NativeVideoSource?
     private var pendingVideoLoadID = UUID()
     private var internalTrackingConfig = TrackingConfigSnapshot.pythonDefaults
@@ -441,48 +442,35 @@ final class AppModel {
             }
 
             engineState = .running
-            statusMessage = "Running native workspace batch for \(sessions.count) trial(s)..."
+            statusMessage = "Preparing native batch coordinator for \(sessions.count) trial(s)..."
 
-            var batchTrials: [NativeBatchTrialSnapshot] = []
-            for (index, entry) in sessions.enumerated() {
-                let trialName = sanitizedTrialName(for: entry.session, fallbackIndex: index + 1)
-                let outputDirectory = outputRoot.appendingPathComponent(trialName, isDirectory: true)
-                let config = try runConfiguration(from: entry.session, outputDirectory: outputDirectory)
-                let rawResult = try await analysisCoordinator.run(
-                    config: config,
-                    preservedSession: entry.session
-                )
-                let mergedResult = postProcess(loadResult: rawResult, sessionOverride: entry.session)
-                let mergedSession = mergedResult.session ?? entry.session
-
-                let trial = nativeExporter.buildBatchTrialReport(
-                    trialID: trialName,
-                    videoPath: mergedSession.videoPath,
-                    rows: mergedResult.analysisRows,
-                    session: mergedSession,
-                    trackID: mergedResult.trackBundles.first(where: { $0.trackID == "primary" })?.trackID ?? "primary",
-                    trackName: mergedResult.trackBundles.first(where: { $0.trackID == "primary" })?.trackName ?? "Primary Object",
-                    summary: mergedResult.summary,
-                    quality: mergedResult.quality,
-                    modules: mergedResult.modules,
-                    pairwiseMetrics: mergedResult.pairwiseMetrics
-                )
-                batchTrials.append(trial)
-                statusMessage = "[\(index + 1)/\(sessions.count)] Finished \(trialName)"
+            let result = try await batchCoordinator.run(
+                entries: sessions,
+                outputRoot: outputRoot,
+                makeRunConfiguration: { [self] entry, outputDirectory in
+                    try await MainActor.run {
+                        try runConfiguration(from: entry.session, outputDirectory: outputDirectory)
+                    }
+                },
+                postProcess: { [self] loadResult, session in
+                    await MainActor.run {
+                        postProcess(loadResult: loadResult, sessionOverride: session)
+                    }
+                }
+            ) { [self] stage in
+                await MainActor.run {
+                    analysisProgressFraction = stage.progressFraction
+                    statusMessage = stage.statusMessage
+                }
             }
 
-            let aggregate = nativeExporter.buildBatchAggregateReport(batchTrials)
-            _ = try nativeExporter.exportBatchAggregateReport(
-                aggregate,
-                to: outputRoot.appendingPathComponent("batch_summary.json")
-            )
-            batchAggregate = aggregate
-            exportDirectory = outputRoot
+            batchAggregate = result.aggregate
+            exportDirectory = result.outputRoot
             selectedTab = .results
             selectedResultsTab = .reproduce
             analysisProgressFraction = 1
             engineState = .ready
-            statusMessage = "Native workspace batch finished for \(aggregate.trialCount) trial(s)."
+            statusMessage = "Native workspace batch finished for \(result.aggregate.trialCount) trial(s)."
         } catch {
             analysisProgressFraction = 0
             engineState = .unavailable
@@ -2513,25 +2501,25 @@ final class AppModel {
         return sqrt((dx * dx) + (dy * dy))
     }
 
-    private func collectBatchSessions() throws -> [(clip: WorkspaceClip, session: SessionSnapshot)] {
-        var entries: [(clip: WorkspaceClip, session: SessionSnapshot)] = []
+    private func collectBatchSessions() throws -> [NativeBatchSessionEntry] {
+        var entries: [NativeBatchSessionEntry] = []
 
         for clip in workspaceClips {
             if !clip.sessionPath.isEmpty, FileManager.default.fileExists(atPath: clip.sessionPath) {
                 let snapshot = try engine.loadSession(from: URL(fileURLWithPath: clip.sessionPath))
-                entries.append((clip, snapshot))
+                entries.append(NativeBatchSessionEntry(clip: clip, session: snapshot))
                 continue
             }
 
             if clip.videoPath == currentVideoURL?.path, let currentVideoURL, isTargetReady, isScaleReady {
                 let snapshot = try buildSessionSnapshot(videoURL: currentVideoURL)
-                entries.append((clip, snapshot))
+                entries.append(NativeBatchSessionEntry(clip: clip, session: snapshot))
             }
         }
 
         if entries.isEmpty, let currentVideoURL, isTargetReady, isScaleReady {
             let fallbackClip = WorkspaceClip(label: currentVideoURL.deletingPathExtension().lastPathComponent, videoPath: currentVideoURL.path)
-            entries.append((fallbackClip, try buildSessionSnapshot(videoURL: currentVideoURL)))
+            entries.append(NativeBatchSessionEntry(clip: fallbackClip, session: try buildSessionSnapshot(videoURL: currentVideoURL)))
         }
 
         return entries
@@ -2657,23 +2645,6 @@ final class AppModel {
         snapshot.bidirectionalRefinement = trackingBidirectionalRefinement
         snapshot.debugTracking = debugTracking
         return snapshot
-    }
-
-    private func sanitizedTrialName(for session: SessionSnapshot, fallbackIndex: Int) -> String {
-        let raw = session.metadata?.trialID?.trimmingCharacters(in: .whitespacesAndNewlines)
-        ?? session.metadata?.experimentLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
-        ?? URL(fileURLWithPath: session.videoPath).deletingPathExtension().lastPathComponent
-
-        let cleaned = raw
-            .replacingOccurrences(of: "/", with: "-")
-            .replacingOccurrences(of: ":", with: "-")
-            .replacingOccurrences(of: "\n", with: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        if cleaned.isEmpty {
-            return String(format: "trial_%02d", fallbackIndex)
-        }
-        return cleaned.replacingOccurrences(of: " ", with: "_")
     }
 
     private func formatted(_ value: Double?) -> String {

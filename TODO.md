@@ -222,10 +222,11 @@ The goal of the next migration phase should be to eliminate `PythonEngineBridge.
 
 ### 18. Port the batch engine to Swift-native execution
 
-- [ ] Replace Python CLI batch execution with a native batch coordinator operating on `WorkspaceClip` and `SessionSnapshot`.
-- [ ] Keep per-trial output folder semantics and aggregate summary parity.
-- [ ] Support mixed single-object and multi-object sessions natively.
-- [ ] Preserve reproducibility metadata and report generation for each batch trial.
+- [x] Replace Python CLI batch execution with a native batch coordinator operating on `WorkspaceClip` and `SessionSnapshot`.
+- [x] Keep per-trial output folder semantics and aggregate summary parity.
+- [x] Support mixed single-object and multi-object sessions natively.
+- [x] Preserve reproducibility metadata and report generation for each batch trial.
+  Native workspace batch execution now flows through `Sources/TrackerAIMac/Core/NativeBatchCoordinator.swift`, which accepts session-backed `WorkspaceClip` entries, runs each trial through the native analysis coordinator, preserves per-trial export directories plus aggregate `batch_summary.json` / `batch_comparison.json` / `batch_report.md` artifacts, and normalizes unique trial folder names without falling back to the Python CLI. `AppModel.runWorkspaceBatchAnalysis()` now delegates to that coordinator instead of owning the batch loop inline, so mixed single-object and multi-object sessions share the same Swift-native execution path while still reusing native post-processing for summaries, QC, pairwise metrics, reproduce commands, and track-level report bundles. Focused regression coverage now lives in `tests/TrackerAIMacTests/NativeBatchCoordinatorTests.swift`, and the full Swift suite passes with this batch migration in place.
 
 ### 19. Port the benchmark and regression harness to Swift
 
