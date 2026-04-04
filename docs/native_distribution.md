@@ -1,6 +1,6 @@
 # Native Distribution Architecture
 
-Tracker AI now treats the native macOS app as the only supported product packaging path. The historical PyInstaller build remains in the repository only for compatibility work on legacy Python tooling and should not be used for product release candidates.
+Tracker AI now treats the native macOS app as the only supported product packaging path. The retired Python CLI and PyInstaller packaging layer have been removed from the repository, so all release engineering should flow through the native Xcode build and archive path.
 
 ## Supported Build Paths
 

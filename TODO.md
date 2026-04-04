@@ -14,35 +14,25 @@ In practical terms, the app helps a user:
 - compute kinematic quantities such as position, velocity, acceleration, path length, and event timings
 - export reproducible research artifacts including tables, summaries, reports, and session files
 
-The repository currently contains two major product layers:
+The repository now centers on one product layer:
 
-- a mature Python analysis engine and desktop workflow under `src/tracker_ai`
-- a newer native macOS SwiftUI/AppKit application under `Sources/TrackerAIMac`
+- a native macOS SwiftUI/AppKit application under `Sources/TrackerAIMac`
 
-The current mission of this codebase is to move the product from a Python-based research desktop tool into a fully native Swift macOS application suitable for long-term productization and eventual App Store distribution, while preserving scientific behavior, reproducibility, and export compatibility during the transition.
+The current mission of this codebase is to polish and commercialize the fully native Swift macOS application while preserving scientific behavior, reproducibility, and import compatibility for existing research artifacts.
 
 ## Current Snapshot
 
-This repository is in a real hybrid state, not an early prototype:
+This repository is now in a native-only product state:
 
-- The Python app under `src/tracker_ai` is still the scientific engine of record.
-- The native macOS app under `Sources/TrackerAIMac` already owns the product shell, direct-on-video drawing workflow, session/workspace loading and saving, results browsing, and native research export/report generation.
-- `Sources/TrackerAIMac/Core/PythonEngineBridge.swift` is now limited to compatibility loading/saving for legacy JSON and exported bundles; the shipping app no longer shells out to `/usr/bin/python3`.
+- The native macOS app under `Sources/TrackerAIMac` owns the product shell, direct-on-video drawing workflow, session/workspace loading and saving, results browsing, and native research export/report generation.
+- `Sources/TrackerAIMac/Core/PythonEngineBridge.swift` is now only a legacy-format compatibility bridge for JSON and exported bundles; the shipping app no longer shells out to `/usr/bin/python3`, and the old Python package has been removed from the repo.
 - The Swift side already reconstructs a lot of post-analysis science natively:
   - smoothing and derived kinematics
   - QC summaries
   - analyzer summaries
   - pairwise metric reconstruction
   - native report and bundle export
-- The Python side still owns the runtime-critical pieces:
-  - video decode/frame iteration
-  - robust object tracking
-  - reference-marker correction during tracking
-  - multi-object experiment execution
-  - authoritative CLI/batch execution path
-  - benchmark harness
-- Python coverage is currently much stronger than Swift coverage.
-- `python3 -m pytest -q tests` passes locally: `20 passed`.
+- Swift-native tests now cover the shipping build, the scientific pipeline, compatibility loading, and release packaging.
 
 ## What Is Already Meaningfully Native
 
@@ -54,11 +44,9 @@ This repository is in a real hybrid state, not an early prototype:
 - [x] Native research export packaging and markdown reporting
 - [x] Native batch summary export on top of session-backed workspace clips
 
-## Main Remaining Migration Boundary
+## Main Remaining Product Boundary
 
-The biggest remaining boundary is: Swift can present, reconstruct, and export results, but Python still produces the tracked observations and the primary analysis payload.
-
-The goal of the next migration phase should be to eliminate `PythonEngineBridge.runAnalysis(...)` as the production path, then progressively retire the Python CLI from the app build and App Store story.
+The core migration boundary is now closed. The remaining work is product polish: commercial-grade UI/UX, distribution, onboarding, licensing, crash reporting, and other launch-readiness details around the native app.
 
 ---
 
@@ -197,7 +185,7 @@ The goal of the next migration phase should be to eliminate `PythonEngineBridge.
 - [x] Preserve progress reporting, cancellation, and error propagation in `AppModel`.
 - [x] Add a feature flag if needed so native and Python engines can be compared side-by-side during migration.
   A standalone engine toggle was not needed once the native coordinator became the production path; instead, each native export is reloaded through the legacy importer so compatibility can still be checked without keeping Python in the execution loop.
-  Native execution now flows through `Sources/TrackerAIMac/Core/NativeAnalysisCoordinator.swift`, which opens the video, runs native multi-object tracking, exports the research bundle, then reloads that bundle through the legacy importer for compatibility validation; `PythonEngineBridge` no longer owns the production run path, the setup UI now reflects native execution with progress/cancel affordances, and focused Swift coordinator tests plus the Python regression suite cover the migrated boundary.
+  Native execution now flows through `Sources/TrackerAIMac/Core/NativeAnalysisCoordinator.swift`, which opens the video, runs native multi-object tracking, exports the research bundle, then reloads that bundle through the legacy importer for compatibility validation; `PythonEngineBridge` no longer owns the production run path, the setup UI now reflects native execution with progress/cancel affordances, and focused Swift coordinator tests cover the migrated boundary.
 
 ### 16. Port correction replay as a native rerun workflow
 
@@ -242,7 +230,7 @@ The goal of the next migration phase should be to eliminate `PythonEngineBridge.
 - [x] Port critical Python tests into Swift fixture-based tests.
 - [x] Add golden-file tests for session JSON, workspace JSON, analysis rows, summary JSON, and report markdown.
 - [x] Add cross-language comparison tests while both engines coexist.
-  The existing SwiftPM `TrackerAIMacTests` target now carries dedicated migration coverage in `tests/TrackerAIMacTests/MigrationBacklog20Tests.swift`, backed by committed golden artifacts under `tests/TrackerAIMacTests/Fixtures/MigrationBacklog20/`. Those tests lock down Swift-native session/workspace serialization plus exported analysis/summary/report artifacts, and they run live Python-vs-Swift parity checks for both compatibility-bridge session loading and scientific row generation while the two engines still coexist. The session compatibility work also exposed and fixed decode gaps for Python-authored metadata and correction track IDs in `Sources/TrackerAIMac/Core/Domain.swift`, so the new cross-language suite is exercising the real shared contract instead of a lossy subset.
+  The existing SwiftPM `TrackerAIMacTests` target now carries dedicated migration coverage in `tests/TrackerAIMacTests/MigrationBacklog20Tests.swift`, backed by committed golden artifacts under `tests/TrackerAIMacTests/Fixtures/MigrationBacklog20/`. Those tests lock down Swift-native session/workspace serialization plus exported analysis/summary/report artifacts, and the session compatibility work exposed and fixed decode gaps for legacy-authored metadata and correction track IDs in `Sources/TrackerAIMac/Core/Domain.swift`, so the native suite is exercising the real shared contract instead of a lossy subset.
 
 ### 21. Remove App Store blockers caused by the embedded Python dependency
 
@@ -260,6 +248,12 @@ The goal of the next migration phase should be to eliminate `PythonEngineBridge.
 - [x] Document the final supported architecture for App Store and direct distribution builds.
   Native release hardening now centers on `scripts/build_native_macos_app.sh`, which supports validated build and archive modes, optional pre-build `swift test`, and source-only validation for fast release-audit checks. `scripts/validate_native_macos_release.sh` enforces the native bundle contract by checking plist metadata, sandbox entitlements, app-icon completeness, and the finished `.app` bundle, while the regenerated AppIcon asset set gives the validator a real completeness gate instead of an empty placeholder catalog. The Xcode target's Release configuration is now correctly wired to `Release.xcconfig` instead of the debug settings, so release builds emit `TrackerAI.app`, produce dSYMs, sign to run locally, and validate cleanly. Distribution guidance for App Store versus direct distribution, including archive handoff, notarization, updater/crash-reporting/licensing planning, and channel-specific responsibilities, now lives in `docs/native_distribution.md`, with the README and in-app help center updated to point at the native-only release path. Verification passed through `swift test`, `bash scripts/build_native_macos_app.sh`, and `bash scripts/build_native_macos_app.sh --archive`.
 
+### 23. Remove the retired Python package and legacy packaging surface from the repository
+
+- [x] Remove the deprecated `src/tracker_ai` package, Python CLI, Python-only tests, and PyInstaller/Conda packaging files.
+- [x] Keep only the native compatibility bridge and Swift-native regression coverage needed by the shipping app.
+- [x] Update repository documentation to describe the project as a native-only macOS codebase.
+
 ---
 
 ## Recommended Execution Order
@@ -276,9 +270,9 @@ If the goal is to maximize progress while reducing risk, tackle the migration in
 
 The Python-to-Swift transformation is only truly complete when all of the following are true:
 
-- [ ] The macOS app can analyze a video end-to-end without launching Python.
-- [ ] Existing session/workspace JSON files still load correctly.
-- [ ] Native results match Python closely enough on synthetic tests and benchmark clips.
-- [ ] Native batch execution replaces `tracker_ai cli batch` for product usage.
+- [x] The macOS app can analyze a video end-to-end without launching Python.
+- [x] Existing session/workspace JSON files still load correctly.
+- [x] Native results match the migration golden fixtures and benchmark expectations closely enough for product usage.
+- [x] Native batch execution replaces the old Python batch path for product usage.
 - [x] The shipping app no longer depends on a local Python runtime.
-- [ ] A Swift regression suite exists for the core scientific pipeline.
+- [x] A Swift regression suite exists for the core scientific pipeline.
