@@ -293,7 +293,7 @@
 /* Begin XCBuildConfiguration section */
 		E10000000000000000000001 /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = B10000000000000000000011 /* Debug.xcconfig */;
+			baseConfigurationReference = B10000000000000000000012 /* Debug.xcconfig */;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 			};
@@ -301,7 +301,7 @@
 		};
 		E10000000000000000000002 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = B10000000000000000000012 /* Release.xcconfig */;
+			baseConfigurationReference = B10000000000000000000013 /* Release.xcconfig */;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 			};

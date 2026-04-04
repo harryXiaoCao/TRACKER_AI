@@ -254,10 +254,11 @@ The goal of the next migration phase should be to eliminate `PythonEngineBridge.
 
 ### 22. Harden packaging, signing, and distribution around the native-only app
 
-- [ ] Make `scripts/build_native_macos_app.sh` the primary supported build path.
-- [ ] Add release checks for app bundle completeness, assets, plist values, and entitlements.
-- [ ] Prepare for notarization, update delivery, crash reporting, and licensing once the native engine is self-contained.
-- [ ] Document the final supported architecture for App Store and direct distribution builds.
+- [x] Make `scripts/build_native_macos_app.sh` the primary supported build path.
+- [x] Add release checks for app bundle completeness, assets, plist values, and entitlements.
+- [x] Prepare for notarization, update delivery, crash reporting, and licensing once the native engine is self-contained.
+- [x] Document the final supported architecture for App Store and direct distribution builds.
+  Native release hardening now centers on `scripts/build_native_macos_app.sh`, which supports validated build and archive modes, optional pre-build `swift test`, and source-only validation for fast release-audit checks. `scripts/validate_native_macos_release.sh` enforces the native bundle contract by checking plist metadata, sandbox entitlements, app-icon completeness, and the finished `.app` bundle, while the regenerated AppIcon asset set gives the validator a real completeness gate instead of an empty placeholder catalog. The Xcode target's Release configuration is now correctly wired to `Release.xcconfig` instead of the debug settings, so release builds emit `TrackerAI.app`, produce dSYMs, sign to run locally, and validate cleanly. Distribution guidance for App Store versus direct distribution, including archive handoff, notarization, updater/crash-reporting/licensing planning, and channel-specific responsibilities, now lives in `docs/native_distribution.md`, with the README and in-app help center updated to point at the native-only release path. Verification passed through `swift test`, `bash scripts/build_native_macos_app.sh`, and `bash scripts/build_native_macos_app.sh --archive`.
 
 ---
 

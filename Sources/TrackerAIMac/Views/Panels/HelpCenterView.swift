@@ -17,13 +17,14 @@ struct HelpCenterView: View {
                 • Native tracking, scientific processing, and bundle export coordination
                 • Legacy bundle reload through the compatibility bridge after native export
                 • Security-scoped file access aligned with App Sandbox user-selected documents
+                • Release validation for plist metadata, entitlements, archive handoff, and app-icon completeness
                 • Charts, event journaling, reproducibility, and commercialization-oriented IA
                 • Secondary-object, correction-anchor, and export-profile parity from the established session model
 
-                Still recommended before broad public launch:
+                Remaining external launch integrations:
                 • Continue polish on setup/review UX and document-based reopening flows
-                • Add signing, notarization, crash reporting, analytics, and onboarding
-                • Finalize an Xcode-based release pipeline once the local Apple toolchain is healthy
+                • Connect Apple signing/notarization credentials for archive export and distribution
+                • Choose and wire the final update, crash-reporting, and licensing providers for the release channel
                 """)
                 .font(.system(size: 14))
                 .foregroundStyle(TrackerTheme.muted)

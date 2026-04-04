@@ -24,6 +24,18 @@ Primary local build path:
 bash scripts/build_native_macos_app.sh
 ```
 
+Release-candidate build with tests:
+
+```bash
+bash scripts/build_native_macos_app.sh --run-tests
+```
+
+Archive build for signing/notarization handoff:
+
+```bash
+bash scripts/build_native_macos_app.sh --archive
+```
+
 Primary product-work path in Xcode:
 
 ```bash
@@ -40,7 +52,7 @@ Suggested in-app workflow:
 6. If tracking drifts, step to the failure frame, click `Draw Correction`, redraw the box, then click `Apply Correction`.
 7. Click `Export Bundle`.
 
-The native app no longer requires a local Python environment, Conda environment, or editable install to run analysis or generate research exports.
+The native app no longer requires a local Python environment, Conda environment, or editable install to run analysis or generate research exports. The native build script now validates release metadata, entitlements, and app-icon completeness before it treats a build as distribution-ready.
 
 ## Legacy Python Tooling
 
@@ -146,8 +158,11 @@ The Xcode project is organized for the commercialization transition:
 Recommended commercialization roadmap:
 
 1. Keep refining native setup/review/document workflows around the now-native engine.
-2. Finish release hardening for signing, notarization, crash reporting, onboarding, licensing, and update delivery.
-3. Preserve compatibility import coverage for legacy JSON/session artifacts while retiring unsupported Python-era packaging assumptions.
+2. Use `scripts/build_native_macos_app.sh` plus `scripts/validate_native_macos_release.sh` as the supported release gate for local builds and archive handoff.
+3. Wire the final external services for signing/notarization credentials, update delivery, crash reporting, and licensing as the launch plan solidifies.
+4. Preserve compatibility import coverage for legacy JSON/session artifacts while retiring unsupported Python-era packaging assumptions.
+
+The supported App Store and direct-distribution architecture is documented in [docs/native_distribution.md](/Users/Harry-Cao/Desktop/TRACKER_AI/docs/native_distribution.md).
 
 ## Notes
 
