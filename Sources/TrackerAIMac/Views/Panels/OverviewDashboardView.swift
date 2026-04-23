@@ -2,89 +2,158 @@ import SwiftUI
 
 struct OverviewDashboardView: View {
     @Bindable var model: AppModel
+    let showsHero: Bool
+
+    init(model: AppModel, showsHero: Bool = true) {
+        self.model = model
+        self.showsHero = showsHero
+    }
 
     var body: some View {
-        VStack(spacing: 16) {
-            HeroPanel {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("Research Mission Control")
-                        .font(.system(size: 28, weight: .bold))
-                        .foregroundStyle(Color.white)
-                    Text("This native shell follows the Figma redesign direction and keeps setup, review, and commercialization planning in one place.")
-                        .font(.system(size: 14))
-                        .foregroundStyle(Color.white.opacity(0.86))
-                    Text(model.currentTrialContext)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Color.white.opacity(0.86))
+        VStack(spacing: TrackerTheme.Spacing.sm) {
+            if showsHero {
+                HeroPanel {
+                    VStack(alignment: .leading, spacing: TrackerTheme.Spacing.sm - 2) {
+                        HStack(alignment: .top, spacing: TrackerTheme.Spacing.sm) {
+                            PanelSectionHeader(
+                                eyebrow: "Overview",
+                                title: overviewTitle,
+                                detail: model.activeClipReadinessSummary,
+                                titleColor: .white,
+                                detailColor: Color.white.opacity(0.82)
+                            )
+
+                            Spacer(minLength: 0)
+
+                            StatusPill(text: overviewStatusText, style: .inverse)
+                        }
+
+                        LazyVGrid(columns: overviewStatusColumns, alignment: .leading, spacing: 10) {
+                            CurrentTrialStatusCard(title: "Preset", value: model.selectedPreset.title, tone: TrackerTheme.ink)
+                            CurrentTrialStatusCard(title: "Frame Range", value: overviewFrameRange, tone: TrackerTheme.ink)
+                            CurrentTrialStatusCard(title: "Workflow", value: model.workflowState.title, tone: TrackerTheme.ink)
+                            CurrentTrialStatusCard(title: "Results", value: overviewResultStatus, tone: TrackerTheme.ink)
+                        }
+                    }
                 }
             }
 
-            HStack(alignment: .top, spacing: 16) {
+            if model.currentVideoURL == nil {
                 TrackerPanel {
-                    VStack(alignment: .leading, spacing: 12) {
-                        SectionEyebrow(text: "Experiment Presets")
-                        Picker("Preset", selection: $model.selectedPresetID) {
-                            ForEach(model.presets) { preset in
-                                Text(preset.title).tag(preset.id)
+                    InlineEmptyState(
+                        eyebrow: "Import First",
+                        title: "The overview stays quiet until a real clip is active.",
+                        detail: "Open a video to unlock calibration, tracking, review, quality summaries, and export guidance without showing stale results from another session.",
+                        symbolName: "film.stack",
+                        actionTitle: "Open Video",
+                        action: { model.openVideo() }
+                    )
+                }
+            } else {
+                VStack(spacing: TrackerTheme.Spacing.sm) {
+                    TrackerPanel {
+                        VStack(alignment: .leading, spacing: TrackerTheme.Spacing.xs) {
+                            PanelSectionHeader(
+                                eyebrow: "Readiness Board",
+                                title: "Current clip status",
+                                detail: "Each row reflects only the active clip in the workspace."
+                            )
+                            ReadinessRow(title: "Video import", complete: model.currentVideoURL != nil)
+                            ReadinessRow(title: "Frame range", complete: model.hasValidFrameRange)
+                            ReadinessRow(title: "Calibration", complete: model.isScaleReady)
+                            ReadinessRow(title: "Target box", complete: model.isTargetReady)
+                            ReadinessRow(title: "Analysis results", complete: model.hasActiveAnalysisResults)
+                            ReadinessRow(title: "Review journal", complete: !model.manualEvents.isEmpty || !model.reviewQueue.isEmpty)
+                            ReadinessRow(title: "Export ready", complete: model.canExportResearchPackage)
+                        }
+                    }
+
+                    TrackerPanel {
+                        VStack(alignment: .leading, spacing: TrackerTheme.Spacing.xs) {
+                            PanelSectionHeader(
+                                eyebrow: "Study Guidance",
+                                title: model.selectedPreset.reviewFocus,
+                                detail: model.selectedPreset.setupTip
+                            )
+
+                            if model.hasActiveAnalysisResults {
+                                if let classification = model.summarySnapshot?.classification {
+                                    Text("Motion classification: \(classification.title) (\(String(format: "%.2f", classification.confidence)))")
+                                        .trackerText(.cardTitle)
+                                }
+
+                                if model.qualityNotes.isEmpty {
+                                    Text("Run notes, quality warnings, and summary guidance will appear here after analysis.")
+                                        .trackerText(.body, color: TrackerTheme.muted)
+                                } else {
+                                    ForEach(model.qualityNotes, id: \.self) { note in
+                                        Text("• \(note)")
+                                            .trackerText(.body)
+                                    }
+                                }
+                            } else {
+                                Text("This clip has not been analyzed yet. Complete calibration and target setup, then run analysis to populate scientific summaries.")
+                                    .trackerText(.body, color: TrackerTheme.muted)
                             }
                         }
-                        .pickerStyle(.menu)
+                    }
+                }
+            }
+
+            VStack(spacing: TrackerTheme.Spacing.sm) {
+                TrackerPanel {
+                    VStack(alignment: .leading, spacing: TrackerTheme.Spacing.xs) {
+                        PanelSectionHeader(
+                            eyebrow: "Presets",
+                            title: "Experiment defaults",
+                            detail: "Apply a preset when you want tracking and reporting defaults tuned for a specific study style."
+                        )
+
+                        TrackerControlSurface(width: 320) {
+                            Picker("Preset", selection: $model.selectedPresetID) {
+                                ForEach(model.presets) { preset in
+                                    Text(preset.title).tag(preset.id)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                        }
+
                         Text(model.selectedPreset.description)
-                            .font(.system(size: 14))
-                            .foregroundStyle(TrackerTheme.muted)
+                            .trackerText(.body, color: TrackerTheme.muted)
+
                         Button("Apply Preset", action: applyPreset)
                             .buttonStyle(PrimaryActionButtonStyle())
                     }
                 }
 
                 TrackerPanel {
-                    VStack(alignment: .leading, spacing: 12) {
-                        SectionEyebrow(text: "Readiness Board")
-                        ReadinessRow(title: "Video Import", complete: model.currentVideoURL != nil)
-                        ReadinessRow(title: "Frame Range", complete: model.endFrame >= model.startFrame)
-                        ReadinessRow(title: "Calibration", complete: model.isScaleReady)
-                        ReadinessRow(title: "Target Box", complete: model.isTargetReady)
-                        ReadinessRow(title: "Reference Marker (Optional)", complete: model.isReferenceReady)
-                        ReadinessRow(title: "Analysis", complete: !model.analysisRows.isEmpty)
-                        ReadinessRow(title: "Event Journal", complete: !model.manualEvents.isEmpty)
-                        ReadinessRow(title: "Derived Events", complete: !model.derivedEvents.isEmpty)
-                        ReadinessRow(title: "Secondary Objects", complete: !model.additionalObjects.isEmpty)
-                        Button("Run Workspace Batch") {
-                            Task {
-                                await model.runWorkspaceBatchAnalysis()
-                            }
-                        }
-                        .buttonStyle(GhostActionButtonStyle())
-                    }
-                }
-            }
+                    VStack(alignment: .leading, spacing: TrackerTheme.Spacing.xs) {
+                        PanelSectionHeader(
+                            eyebrow: "Trust Markers",
+                            title: trustMarkerTitle,
+                            detail: trustMarkerDetail
+                        )
 
-            TrackerPanel {
-                VStack(alignment: .leading, spacing: 12) {
-                    SectionEyebrow(text: "Protocol Notes")
-                    Text(model.selectedPreset.reviewFocus)
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(TrackerTheme.ink)
-                    Text(model.selectedPreset.setupTip)
-                        .font(.system(size: 14))
-                        .foregroundStyle(TrackerTheme.muted)
-                    if let classification = model.summarySnapshot?.classification {
-                        Text("Native classifier: \(classification.title) (\(String(format: "%.2f", classification.confidence)))")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(TrackerTheme.ink)
-                    }
-                    ForEach(model.qualityNotes, id: \.self) { note in
-                        Text("• \(note)")
-                            .font(.system(size: 13))
-                            .foregroundStyle(TrackerTheme.ink)
-                    }
-                    if let aggregate = model.batchAggregate {
-                        Divider()
-                        Text("Batch mean quality index: \(String(format: "%.3f", aggregate.meanQualityIndex))")
-                            .font(.system(size: 13, weight: .semibold))
-                        Text("Classification spread: \(aggregate.classifications.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " • "))")
-                            .font(.system(size: 12))
-                            .foregroundStyle(TrackerTheme.muted)
+                        if let aggregate = model.batchAggregate {
+                            Text("Batch mean quality index: \(String(format: "%.3f", aggregate.meanQualityIndex))")
+                                .trackerText(.cardTitle)
+                            Text("Classification spread: \(aggregate.classifications.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " • "))")
+                                .trackerText(.caption, color: TrackerTheme.muted)
+                        } else {
+                            ReadinessRow(title: "Saved session available", complete: model.canSaveWorkspace || !model.workspaceClips.isEmpty)
+                            ReadinessRow(title: "Quality signals loaded", complete: model.hasTrackQualitySignals)
+                            ReadinessRow(title: "Export destination set", complete: model.exportDirectory != nil)
+                            if model.canRunWorkspaceBatch {
+                                Button("Run Batch Analysis") {
+                                    Task {
+                                        await model.runWorkspaceBatchAnalysis()
+                                    }
+                                }
+                                .buttonStyle(SuccessActionButtonStyle())
+                            }
+                            Text(model.workspaceBatchGuardrailMessage)
+                                .trackerText(.caption, color: TrackerTheme.muted)
+                        }
                     }
                 }
             }
@@ -93,5 +162,45 @@ struct OverviewDashboardView: View {
 
     private func applyPreset() {
         model.applyPreset(model.selectedPreset)
+    }
+
+    private var overviewStatusColumns: [GridItem] {
+        Array(repeating: GridItem(.flexible(minimum: 120, maximum: 220), spacing: 10, alignment: .top), count: 2)
+    }
+
+    private var overviewTitle: String {
+        model.currentVideoURL == nil ? "Experiment overview" : model.currentTrialHeadline
+    }
+
+    private var overviewFrameRange: String {
+        model.currentVideoURL == nil ? "No clip loaded" : "\(model.startFrame) → \(model.endFrame)"
+    }
+
+    private var overviewResultStatus: String {
+        model.hasActiveAnalysisResults ? "Loaded" : "Pending"
+    }
+
+    private var overviewStatusText: String {
+        model.currentVideoURL == nil ? "Awaiting import" : model.workflowState.title
+    }
+
+    private var trustMarkerTitle: String {
+        if model.hasActiveAnalysisResults {
+            return "Active clip results are ready for review and export."
+        }
+        if model.currentVideoURL != nil {
+            return "The active clip is still in setup."
+        }
+        return "No clip is active in the workspace."
+    }
+
+    private var trustMarkerDetail: String {
+        if model.hasActiveAnalysisResults {
+            return "Review, quality, and export surfaces now reflect the same active clip."
+        }
+        if model.currentVideoURL != nil {
+            return "No results will be shown here until this clip has its own analysis run or loaded session."
+        }
+        return "Import a clip to start collecting readiness, quality, and export markers."
     }
 }

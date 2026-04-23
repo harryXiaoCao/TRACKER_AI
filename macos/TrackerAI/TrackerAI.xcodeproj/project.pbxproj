@@ -31,6 +31,7 @@
 		A10000000000000000000016 /* NativeTrackingRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001C /* NativeTrackingRuntime.swift */; };
 		A10000000000000000000017 /* NativeAnalysisCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001D /* NativeAnalysisCoordinator.swift */; };
 		A10000000000000000000018 /* NativeBatchCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001E /* NativeBatchCoordinator.swift */; };
+		A10000000000000000000019 /* WorkspaceCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001F /* WorkspaceCommands.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -64,6 +65,7 @@
 		B1000000000000000000001C /* NativeTrackingRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/TrackerAIMac/Core/NativeTrackingRuntime.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000001D /* NativeAnalysisCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/TrackerAIMac/Core/NativeAnalysisCoordinator.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000001E /* NativeBatchCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/TrackerAIMac/Core/NativeBatchCoordinator.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000001F /* WorkspaceCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/TrackerAIMac/App/WorkspaceCommands.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -94,6 +96,7 @@
 			isa = PBXGroup;
 			children = (
 				B10000000000000000000001 /* TrackerAIMacApp.swift */,
+				B1000000000000000000001F /* WorkspaceCommands.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -285,6 +288,7 @@
 				A10000000000000000000016 /* NativeTrackingRuntime.swift in Sources */,
 				A10000000000000000000017 /* NativeAnalysisCoordinator.swift in Sources */,
 				A10000000000000000000018 /* NativeBatchCoordinator.swift in Sources */,
+				A10000000000000000000019 /* WorkspaceCommands.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

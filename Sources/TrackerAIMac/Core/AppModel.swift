@@ -7,11 +7,12 @@ import Observation
 @MainActor
 @Observable
 final class AppModel {
-    var selectedTab: LabTab = .overview
+    var selectedTab: LabTab = .import
+    var workflowState: WorkflowState = .import
     var selectedResultsTab: ResultsSubtab = .insights
     var engineState: EngineState = .ready
-    var statusMessage = "Native shell ready. Import a video or load a saved session to begin."
-    var selectionMessage = "Choose a preset, then calibrate and define the target box."
+    var statusMessage = "Ready to begin. Open a video or load a saved session."
+    var selectionMessage = "Choose a preset, then calibrate the clip and define the target."
     var analysisProgressFraction = 0.0
 
     var presets = ResearchPreset.all
@@ -45,12 +46,14 @@ final class AppModel {
     var includeOverlay = true
     var includePlots = true
     var reportTemplate = "research"
+    var targetPreviewStatus: TargetPreviewStatus = .idle
+    var targetPreviewMessage = "Run a quick preview after drawing the target."
     var advancedMode = false {
         didSet {
             guard oldValue != advancedMode else { return }
             statusMessage = advancedMode
-                ? "Advanced calibration controls enabled."
-                : "Advanced calibration controls hidden. The current scientific setup is still preserved."
+                ? "Advanced calibration controls are available."
+                : "Advanced calibration controls are hidden. Your current setup is preserved."
         }
     }
     var calibrationMode = "single_line"
@@ -98,7 +101,7 @@ final class AppModel {
     var reportMarkdown = ""
     var exportDirectory: URL?
     var nativeBundleDirectory: URL?
-    var reproduceCommand = "# Native TrackerAI reproduction workflow\nopen -a TrackerAI"
+    var reproduceCommand = "# TrackerAI reproducibility workflow\nopen -a TrackerAI"
     var summarySnapshot: SummarySnapshot?
     var qualitySnapshot: QualitySnapshot?
     var analyzerSnapshots: [AnalyzerSnapshot] = []
@@ -142,6 +145,7 @@ final class AppModel {
 
     init() {
         bootstrapWorkspace()
+        syncWorkflowState()
     }
 
     var selectedPreset: ResearchPreset {
@@ -149,7 +153,7 @@ final class AppModel {
     }
 
     private func nativeReproducePlaceholder() -> String {
-        "# Native TrackerAI reproduction workflow\nopen -a TrackerAI"
+        "# TrackerAI reproducibility workflow\nopen -a TrackerAI"
     }
 
     private func bookmarkForVideoURL(_ url: URL) -> String? {
@@ -203,16 +207,50 @@ final class AppModel {
 
     var currentTrialContext: String {
         if currentVideoURL == nil {
-            return "Load a clip or session to start the commercialization-ready native workflow."
+            return "Load a clip or session to begin setup, tracking, review, and export."
         }
         let classification = summarySnapshot?.classification?.title ?? "pending"
         let referenceState = isReferenceReady ? "enabled" : "optional"
-        return "Preset: \(selectedPreset.title)\nFrame range: \(startFrame) → \(endFrame)\nActive track: \(activeTrackLabel)\nClassification: \(classification)\nReference marker: \(referenceState)\nManual events: \(manualEvents.count) | Derived events: \(derivedEvents.count) | Review items: \(reviewQueue.count) | Secondary objects: \(additionalObjects.count)"
+        return "Preset: \(selectedPreset.title)\nFrame range: \(startFrame) → \(endFrame)\nActive track: \(activeTrackLabel)\nClassification: \(classification)\nReference marker: \(referenceState)\nManual events: \(manualEvents.count) | Derived events: \(derivedEvents.count) | Review items: \(reviewQueue.count) | Additional objects: \(additionalObjects.count)"
     }
 
     var isTargetReady: Bool { targetBox.isComplete }
     var isScaleReady: Bool { scaleLine.isComplete }
     var isReferenceReady: Bool { referenceBox.isComplete }
+    var hasAnalysisResults: Bool { !analysisRows.isEmpty || trackBundles.contains(where: { !$0.analysisRows.isEmpty }) }
+    var hasActiveAnalysisResults: Bool { currentVideoURL != nil && hasAnalysisResults }
+    var hasValidFrameRange: Bool { currentVideoURL != nil && endFrame >= startFrame }
+    var hasTrackQualitySignals: Bool { !qualityNotes.isEmpty || qualitySnapshot != nil || !reviewQueue.isEmpty }
+    var activeClipReadinessSummary: String {
+        guard currentVideoURL != nil else {
+            return "Import a clip to unlock setup, review, and exports."
+        }
+        if hasActiveAnalysisResults {
+            return "Results shown here belong to the active clip."
+        }
+        if isScaleReady && isTargetReady && calibrationValidationMessage == nil {
+            return "This clip is ready to run."
+        }
+        return "Finish calibration and target setup for this clip before analysis."
+    }
+    var hasBatchReadyEntries: Bool {
+        workspaceClips.contains { clip in
+            (!clip.sessionPath.isEmpty && FileManager.default.fileExists(atPath: clip.sessionPath)) ||
+            (clip.videoPath == currentVideoURL?.path && isTargetReady && isScaleReady)
+        } || (currentVideoURL != nil && isTargetReady && isScaleReady)
+    }
+    var completedWorkflowStates: [WorkflowState] {
+        let states = WorkflowState.allCases
+        guard let currentIndex = states.firstIndex(of: workflowState) else { return [] }
+        return Array(states.prefix(currentIndex))
+    }
+    var nextRecommendedWorkflowState: WorkflowState? {
+        let states = WorkflowState.allCases
+        guard let currentIndex = states.firstIndex(of: workflowState), currentIndex + 1 < states.count else {
+            return nil
+        }
+        return states[currentIndex + 1]
+    }
     var referenceMarkerStatus: String {
         if isReferenceReady {
             return "Ready"
@@ -222,7 +260,103 @@ final class AppModel {
         }
         return "Optional"
     }
+    var canSaveSession: Bool { currentVideoURL != nil && isTargetReady && isScaleReady && calibrationValidationMessage == nil }
+    var canSaveWorkspace: Bool { !workspaceClips.isEmpty || currentVideoURL != nil }
     var canRunAnalysis: Bool { currentVideoURL != nil && isTargetReady && isScaleReady && calibrationValidationMessage == nil }
+    var canUseFrameRangeControls: Bool { currentVideoURL != nil }
+    var canManageCompanions: Bool { currentVideoURL != nil }
+    var canUseReviewTools: Bool { hasActiveAnalysisResults }
+    var canDrawCorrection: Bool { canUseReviewTools && engineState != .running }
+    var canReplayCorrections: Bool { canDrawCorrection }
+    var canExportResearchPackage: Bool { currentVideoURL != nil && hasActiveAnalysisResults && engineState != .running }
+    var canRunWorkspaceBatch: Bool { hasBatchReadyEntries && engineState != .running }
+    var canJumpToReview: Bool { canUseReviewTools }
+    var canJumpToResults: Bool { hasActiveAnalysisResults }
+    var completedMilestones: [CompletionMilestone] {
+        var milestones: [CompletionMilestone] = []
+        if currentVideoURL != nil {
+            milestones.append(.videoLoaded)
+            if isScaleReady && calibrationValidationMessage == nil {
+                milestones.append(.calibrationFinished)
+            }
+            if isTargetReady {
+                milestones.append(.targetLocked)
+            }
+            if hasActiveAnalysisResults {
+                milestones.append(.analysisCompleted)
+            }
+            if canExportResearchPackage {
+                milestones.append(.exportReady)
+            }
+        }
+        return milestones
+    }
+    var milestoneBannerSummary: String {
+        if completedMilestones.isEmpty {
+            return "Complete the setup milestones to unlock review and export."
+        }
+        return "\(completedMilestones.count) of \(CompletionMilestone.allCases.count) critical milestones completed."
+    }
+    var analysisGuardrailMessage: String {
+        if engineState == .running {
+            return "Analysis is already running."
+        }
+        if currentVideoURL == nil {
+            return "Load a video to enable analysis."
+        }
+        if !isScaleReady {
+            return "Draw the calibration scale to enable analysis."
+        }
+        if !isTargetReady {
+            return "Draw the target box to enable analysis."
+        }
+        if let calibrationValidationMessage {
+            return calibrationValidationMessage
+        }
+        return "Analysis is ready to run."
+    }
+    var targetPreviewStatusTitle: String {
+        switch targetPreviewStatus {
+        case .idle:
+            return "Preview not run"
+        case .passed:
+            return "Preview passed"
+        case .warning:
+            return "Preview needs review"
+        case .failed:
+            return "Preview blocked"
+        }
+    }
+    var exportGuardrailMessage: String {
+        if engineState == .running {
+            return "Finish or cancel the current analysis before exporting."
+        }
+        if currentVideoURL == nil {
+            return "Load a video before exporting."
+        }
+        if !hasActiveAnalysisResults {
+            return "Run or load analysis results before exporting."
+        }
+        return "Results are ready to export."
+    }
+    var workspaceBatchGuardrailMessage: String {
+        if engineState == .running {
+            return "Wait for the current analysis to finish before starting batch analysis."
+        }
+        if hasBatchReadyEntries {
+            return "Batch analysis is ready for all saved or fully prepared trials."
+        }
+        return "Save at least one session or fully prepare the active trial before starting batch analysis."
+    }
+    var reviewGuardrailMessage: String {
+        if hasActiveAnalysisResults {
+            return "Review tools are ready for quality checks and corrections."
+        }
+        if currentVideoURL == nil {
+            return "Import a clip before opening review tools."
+        }
+        return "Run or load analysis results for the active clip before using review and results."
+    }
     var canCancelAnalysis: Bool { analysisRunTask != nil && engineState == .running }
     var maxFrame: Double { Double(max(endFrame, startFrame + 1)) }
     var allEvents: [EventMarkerRecord] { nativeScientificReporter.mergeEventMarkers(manualEvents, withDerived: derivedEvents) }
@@ -230,7 +364,7 @@ final class AppModel {
         trackBundles.first(where: { $0.trackID == activeTrackID }) ?? trackBundles.first
     }
     var activeTrackLabel: String {
-        guard let activeTrackBundle else { return "Primary Object" }
+        guard let activeTrackBundle else { return "Primary Target" }
         return "\(activeTrackBundle.trackName) [\(activeTrackBundle.trackKind)]"
     }
     var selectedPairwiseMetric: PairwiseMetricSnapshot? {
@@ -254,10 +388,10 @@ final class AppModel {
         return markers
     }
     var trackingControlsSummary: String {
-        "User-facing in Swift: profile, robust recovery, bidirectional refinement, and debug export."
+        "Tracking controls include profile, recovery behavior, bidirectional refinement, and debug exports."
     }
     var internalTrackingControlsSummary: String {
-        "Session-persistent but internal-only for now: search margins, thresholds, interpolation, scale factors, template update tuning, and marker confidence bias."
+        "Additional analysis settings stay with the session, including search margins, thresholds, interpolation, scale factors, template updates, and marker confidence weighting."
     }
     var currentFrameTimestampText: String {
         String(format: "%.3f s", currentFrameTimestamp)
@@ -347,16 +481,186 @@ final class AppModel {
         timestampForFrame(currentFrame)
     }
 
+    private var requiredSetupCompletionCount: Int {
+        var count = 0
+        if isScaleReady && calibrationValidationMessage == nil {
+            count += 1
+        }
+        if isTargetReady {
+            count += 1
+        }
+        if hasValidFrameRange {
+            count += 1
+        }
+        return count
+    }
+
+    private func workflowStateToShellStepNumber(_ state: WorkflowState) -> Int? {
+        switch state {
+        case .import:
+            return 1
+        case .calibrate, .track:
+            return 2
+        case .review:
+            return 3
+        case .export:
+            return 4
+        }
+    }
+
+    private func inferredWorkflowState() -> WorkflowState {
+        guard currentVideoURL != nil else { return .import }
+        guard isScaleReady && isTargetReady && calibrationValidationMessage == nil else { return .calibrate }
+        if analysisRunTask != nil || engineState == .running {
+            return .track
+        }
+        if hasAnalysisResults {
+            if workflowState == .export || selectedTab == .results {
+                return .export
+            }
+            return .review
+        }
+        return .track
+    }
+
+    private func syncWorkflowState(preferredState: WorkflowState? = nil) {
+        let resolvedState = preferredState ?? inferredWorkflowState()
+        guard workflowState != resolvedState else { return }
+        workflowState = resolvedState
+    }
+
     func bootstrapWorkspace() {
-        let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let sampleVideo = root.appendingPathComponent("sample_data/projectile_sample.mp4")
-        if FileManager.default.fileExists(atPath: sampleVideo.path) {
-            let clip = WorkspaceClip(label: "projectile_sample", videoPath: sampleVideo.path)
-            workspaceClips = [clip]
-            loadVideo(sampleVideo)
+        resetWorkspaceBootState()
+        if shouldBootstrapSampleWorkspace {
+            if let sampleVideo = sampleProjectVideoURL() {
+                let clip = WorkspaceClip(label: "projectile_sample", videoPath: sampleVideo.path)
+                workspaceClips = [clip]
+                loadVideo(sampleVideo)
+                if currentVideoURL != nil {
+                    loadSampleInsights()
+                }
+            }
         }
         applyPreset(selectedPreset)
-        loadSampleInsights()
+        if currentVideoURL == nil {
+            resetAnalysisPresentationState()
+        }
+        syncWorkflowState()
+    }
+
+    private var shouldBootstrapSampleWorkspace: Bool {
+        ProcessInfo.processInfo.environment["TRACKERAI_BOOTSTRAP_SAMPLE"] == "1"
+    }
+
+    private func sampleProjectVideoURL() -> URL? {
+        let fileManager = FileManager.default
+        var searchRoots = [URL(fileURLWithPath: fileManager.currentDirectoryPath)]
+
+        var cursor = Bundle.main.bundleURL
+        for _ in 0..<8 {
+            cursor.deleteLastPathComponent()
+            searchRoots.append(cursor)
+        }
+
+        for root in searchRoots {
+            let candidate = root.appendingPathComponent("sample_data/projectile_sample.mp4")
+            if fileManager.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+        }
+
+        return nil
+    }
+
+    private func resetWorkspaceBootState() {
+        selectedTab = .import
+        workspaceClips = []
+        currentVideoURL = nil
+        currentVideoSource = nil
+        currentVideoBookmarkData = nil
+        currentVideoAccessLease = nil
+        sourceVideoMetadata = nil
+        player = nil
+        nativeBundleDirectory = nil
+        exportDirectory = nil
+        batchAggregate = nil
+        summarySnapshot = nil
+        qualitySnapshot = nil
+        analyzerSnapshots = []
+        sessionTrackQuality = nil
+    }
+
+    private func resetAnalysisPresentationState() {
+        analysisRows = []
+        analysisModules = []
+        qualityNotes = []
+        qcBadge = "pending"
+        reportMarkdown = ""
+        summarySnapshot = nil
+        qualitySnapshot = nil
+        analyzerSnapshots = []
+        sessionTrackQuality = nil
+        batchAggregate = nil
+        trackBundles = []
+        activeTrackID = "primary"
+        pairwiseMetrics = []
+        selectedPairwiseMetricID = nil
+        reviewQueue = []
+        dismissedReviewFrames.removeAll()
+        manualEvents = []
+        derivedEvents = []
+        metricTiles = [
+            MetricTile(title: "Avg Confidence", value: "--"),
+            MetricTile(title: "Peak Speed", value: "--"),
+            MetricTile(title: "Peak Accel", value: "--"),
+            MetricTile(title: "Path Length", value: "--"),
+        ]
+    }
+
+    private func resetClipDraftState() {
+        experimentLabel = ""
+        trialID = ""
+        operatorName = ""
+        notes = ""
+        tags = ""
+        targetBox = BoundingBoxDraft()
+        scaleLine = ScaleLineDraft()
+        referenceBox = BoundingBoxDraft()
+        annotationMode = .idle
+        editingCorrectionID = nil
+        editingAdditionalObjectID = nil
+        additionalObjectDraft = AdditionalObjectDraft()
+        additionalObjects = []
+        corrections = []
+        manualEventName = "release"
+        manualEventValue = ""
+        manualEventUnit = ""
+        manualEventNote = ""
+        targetPreviewStatus = .idle
+        targetPreviewMessage = "Run a quick preview after drawing the target."
+        selectedWindowStart = nil
+        selectedWindowEnd = nil
+        referenceLength = "1.0"
+        unitLabel = "m"
+        calibrationMode = "single_line"
+        calibrationOriginXInput = "0"
+        calibrationOriginYInput = "0"
+        calibrationAxisAngleInput = "0"
+        calibrationInvertX = false
+        calibrationInvertY = false
+        calibrationHomographyInput = ""
+        calibrationPresetName = ""
+        calibrationPixelDistanceInput = "20"
+    }
+
+    private func prepareForFreshClipImport() {
+        selectedTab = .import
+        resetClipDraftState()
+        resetAnalysisPresentationState()
+        nativeBundleDirectory = nil
+        exportDirectory = nil
+        reproduceCommand = nativeReproducePlaceholder()
+        selectionMessage = "Choose a preset, then calibrate the clip and define the target."
     }
 
     func applyPreset(_ preset: ResearchPreset) {
@@ -366,18 +670,20 @@ final class AppModel {
         polyorder = String(preset.polyorder)
         reportTemplate = preset.reportTemplate
         selectionMessage = preset.reviewFocus
-        statusMessage = "Applied preset: \(preset.title)"
+        statusMessage = "Applied preset: \(preset.title)."
         reproduceCommand = nativeReproducePlaceholder()
     }
 
     func openVideo() {
         guard let url = FilePanels.openVideo() else { return }
         let videoBookmark = bookmarkForVideoURL(url)
+        prepareForFreshClipImport()
         loadVideo(url, bookmark: videoBookmark)
         addOrActivateWorkspaceClip(videoURL: url, videoBookmark: videoBookmark, sessionPath: "", sessionBookmark: nil)
         selectedTab = .setup
-        statusMessage = "Loaded \(url.lastPathComponent)"
-        selectionMessage = "Define the range, calibration line, and target box before running analysis."
+        syncWorkflowState(preferredState: .calibrate)
+        statusMessage = "Opened \(url.lastPathComponent)."
+        selectionMessage = "Set the range, calibration scale, and target before running analysis."
     }
 
     func loadSession() {
@@ -399,7 +705,8 @@ final class AppModel {
                 sessionBookmark: snapshot.bundleDirectoryBookmarkData ?? sessionBookmark
             )
             selectedTab = .overview
-            statusMessage = "Loaded session \(url.lastPathComponent)"
+            syncWorkflowState(preferredState: hasAnalysisResults ? .review : nil)
+            statusMessage = "Opened session \(url.lastPathComponent)."
         } catch {
             statusMessage = error.localizedDescription
         }
@@ -414,7 +721,8 @@ final class AppModel {
             if let active = workspaceClips.first(where: { $0.videoPath == snapshot.activeVideoPath }) ?? workspaceClips.first {
                 activateWorkspaceClip(active)
             }
-            statusMessage = "Loaded workspace \(snapshot.title)"
+            syncWorkflowState()
+            statusMessage = "Opened workspace \(snapshot.title)."
         } catch {
             statusMessage = error.localizedDescription
         }
@@ -429,7 +737,7 @@ final class AppModel {
                 items: workspaceClips
             )
             try saveWorkspaceSnapshot(snapshot, to: url, accessBookmark: bookmarkForSessionURL(url))
-            statusMessage = "Saved workspace to \(url.lastPathComponent)"
+            statusMessage = "Saved workspace to \(url.lastPathComponent)."
         } catch {
             statusMessage = error.localizedDescription
         }
@@ -437,11 +745,11 @@ final class AppModel {
 
     func saveSession() {
         guard let videoURL = currentVideoURL else {
-            statusMessage = "Load a video before saving a session."
+            statusMessage = "Open a video before saving a session."
             return
         }
         guard isTargetReady && isScaleReady else {
-            statusMessage = "Define the target box and scale line before saving a session."
+            statusMessage = "Define the target and calibration scale before saving a session."
             return
         }
         guard let url = FilePanels.saveJSON(title: "Save Tracker Session", suggestedName: "tracker-session.json") else { return }
@@ -456,7 +764,7 @@ final class AppModel {
                 sessionPath: url.path,
                 sessionBookmark: sessionBookmark
             )
-            statusMessage = "Saved native session to \(url.lastPathComponent)"
+            statusMessage = "Saved session to \(url.lastPathComponent)."
         } catch {
             statusMessage = error.localizedDescription
         }
@@ -467,7 +775,7 @@ final class AppModel {
             statusMessage = NativeResearchExportError.missingVideoPath.localizedDescription
             return
         }
-        guard let directory = FilePanels.chooseDirectory(title: "Choose Native Research Package Directory") else { return }
+        guard let directory = FilePanels.chooseDirectory(title: "Choose Export Directory") else { return }
         do {
             let outputAccessLease = SecurityScopedBookmarks.access(url: directory, bookmark: bookmarkForBundleDirectory(directory))
             defer { _ = outputAccessLease }
@@ -493,17 +801,18 @@ final class AppModel {
             nativeBundleDirectory = directory
             exportDirectory = directory
             if let manifest = outputs["manifest"] {
-                statusMessage = "Exported native research package to \(manifest.deletingLastPathComponent().lastPathComponent)"
+                statusMessage = "Exported results to \(manifest.deletingLastPathComponent().lastPathComponent)."
             } else {
-                statusMessage = "Exported native research package."
+                statusMessage = "Exported results."
             }
+            syncWorkflowState(preferredState: .export)
         } catch {
             statusMessage = error.localizedDescription
         }
     }
 
     func runWorkspaceBatchAnalysis() async {
-        guard let outputRoot = FilePanels.chooseDirectory(title: "Choose Native Batch Export Directory") else { return }
+        guard let outputRoot = FilePanels.chooseDirectory(title: "Choose Batch Export Directory") else { return }
 
         do {
             let outputAccessLease = SecurityScopedBookmarks.access(url: outputRoot, bookmark: bookmarkForBundleDirectory(outputRoot))
@@ -515,7 +824,7 @@ final class AppModel {
             }
 
             engineState = .running
-            statusMessage = "Preparing native batch coordinator for \(sessions.count) trial(s)..."
+            statusMessage = "Preparing batch analysis for \(sessions.count) trial(s)..."
 
             let result = try await batchCoordinator.run(
                 entries: sessions,
@@ -543,16 +852,21 @@ final class AppModel {
             selectedResultsTab = .reproduce
             analysisProgressFraction = 1
             engineState = .ready
-            statusMessage = "Native workspace batch finished for \(result.aggregate.trialCount) trial(s)."
+            syncWorkflowState(preferredState: .export)
+            statusMessage = "Batch analysis finished for \(result.aggregate.trialCount) trial(s)."
         } catch {
             analysisProgressFraction = 0
             engineState = .unavailable
+            syncWorkflowState()
             statusMessage = error.localizedDescription
         }
     }
 
     func activateWorkspaceClip(_ clip: WorkspaceClip) {
         let videoURL = URL(fileURLWithPath: clip.videoPath)
+        if clip.sessionPath.isEmpty || !FileManager.default.fileExists(atPath: clip.sessionPath) {
+            prepareForFreshClipImport()
+        }
         loadVideo(videoURL, bookmark: clip.videoBookmarkData)
         if !clip.sessionPath.isEmpty, FileManager.default.fileExists(atPath: clip.sessionPath) {
             do {
@@ -566,11 +880,300 @@ final class AppModel {
                     bundleAccessBookmark: snapshot.bundleDirectoryBookmarkData ?? clip.sessionBookmarkData
                 )
             } catch {
-                statusMessage = "Loaded clip, but session parsing failed: \(error.localizedDescription)"
+                statusMessage = "Opened the clip, but the saved session could not be read: \(error.localizedDescription)"
             }
         } else {
-            statusMessage = "Activated workspace clip \(clip.label)"
+            statusMessage = "Opened clip \(clip.label)."
         }
+        syncWorkflowState(preferredState: hasAnalysisResults ? .review : nil)
+    }
+
+    func shellNavigationState(for tab: LabTab) -> ShellNavigationState {
+        if selectedTab == tab {
+            return .active
+        }
+
+        switch tab {
+        case .import:
+            return currentVideoURL == nil ? .available : .complete
+        case .overview:
+            return currentVideoURL == nil ? .available : .complete
+        case .setup:
+            guard currentVideoURL != nil else {
+                return .locked(reason: "Import a clip to unlock setup.")
+            }
+            if isScaleReady && isTargetReady && calibrationValidationMessage == nil {
+                return .complete
+            }
+            return .available
+        case .review:
+            guard currentVideoURL != nil else {
+                return .locked(reason: "Import a clip before review becomes available.")
+            }
+            guard hasActiveAnalysisResults else {
+                return .locked(reason: "Run or load analysis for this clip to unlock review.")
+            }
+            return reviewQueue.isEmpty ? .complete : .available
+        case .results:
+            guard currentVideoURL != nil else {
+                return .locked(reason: "Import a clip before results become available.")
+            }
+            guard hasActiveAnalysisResults else {
+                return .locked(reason: "Run or load analysis for this clip to unlock results.")
+            }
+            return canExportResearchPackage || exportDirectory != nil ? .complete : .available
+        case .help:
+            return .available
+        }
+    }
+
+    var shellWorkflowTabs: [LabTab] {
+        [.import, .setup, .review, .results]
+    }
+
+    var shellCompletedWorkflowStepCount: Int {
+        shellWorkflowTabs.reduce(into: 0) { count, tab in
+            if case .complete = shellNavigationState(for: tab) {
+                count += 1
+            }
+        }
+    }
+
+    var shellActiveWorkflowStepLabel: String {
+        if let activeStep = selectedTab.railStepNumber {
+            return "Step \(activeStep) of \(shellWorkflowTabs.count)"
+        }
+        if let workflowStep = workflowStateToShellStepNumber(workflowState) {
+            return "Workflow at step \(workflowStep) of \(shellWorkflowTabs.count)"
+        }
+        return "Workflow ready"
+    }
+
+    var shellWorkflowProgressSummary: String {
+        "\(shellCompletedWorkflowStepCount) of \(shellWorkflowTabs.count) workflow stages completed"
+    }
+
+    func shellNavigationStatusText(for tab: LabTab) -> String {
+        switch shellNavigationState(for: tab) {
+        case .available:
+            return tab == .import && currentVideoURL == nil ? "Start here" : "Available"
+        case .active:
+            return "Current"
+        case .complete:
+            return "Complete"
+        case .locked:
+            return "Locked"
+        }
+    }
+
+    func shellNavigationStatusTone(for tab: LabTab) -> TrackerTheme.Status {
+        switch shellNavigationState(for: tab) {
+        case .available:
+            return tab == .import && currentVideoURL == nil ? .warning : .ready
+        case .active:
+            return .accent
+        case .complete:
+            return .complete
+        case .locked:
+            return .warning
+        }
+    }
+
+    func shellNavigationDetail(for tab: LabTab) -> String {
+        switch tab {
+        case .import:
+            if let url = currentVideoURL {
+                return "Loaded clip: \(url.lastPathComponent)"
+            }
+            return "No active clip. Import opens the scientific workspace."
+        case .overview:
+            if currentVideoURL == nil {
+                return "Quick start, presets, and trust markers stay quiet until a clip is active."
+            }
+            return hasActiveAnalysisResults
+                ? "Readiness, quality, and export trust markers reflect this clip."
+                : "Use overview to confirm readiness before analysis."
+        case .setup:
+            if currentVideoURL == nil {
+                return "Import a clip to unlock scale, target, and range tools."
+            }
+            if isScaleReady && isTargetReady && calibrationValidationMessage == nil {
+                return "Scale, target, and range are ready for analysis."
+            }
+            return analysisGuardrailMessage
+        case .review:
+            if currentVideoURL == nil {
+                return "Review activates only after a real clip is loaded."
+            }
+            if !hasActiveAnalysisResults {
+                return "Run or load analysis to inspect flagged spans and corrections."
+            }
+            return reviewQueue.isEmpty
+                ? "No queued issues remain for the active clip."
+                : "\(reviewQueue.count) queued issue\(reviewQueue.count == 1 ? "" : "s") ready for review."
+        case .results:
+            if currentVideoURL == nil {
+                return "Results remain quiet until a clip is loaded."
+            }
+            if !hasActiveAnalysisResults {
+                return "Run or load analysis to populate graphs, tables, and exports."
+            }
+            return exportDirectory != nil
+                ? "Graphs, tables, and export outputs are ready for the active clip."
+                : "Results are loaded and ready to inspect or export."
+        case .help:
+            return currentVideoURL == nil
+                ? "Short workflow guidance stays available before import."
+                : "Scientific terms and workflow guidance stay anchored to the current workspace."
+        }
+    }
+
+    func shellNavigationAccessory(for tab: LabTab) -> String? {
+        switch tab {
+        case .import:
+            return currentVideoURL == nil ? nil : "Clip"
+        case .overview:
+            return currentVideoURL == nil ? nil : "Live"
+        case .setup:
+            return currentVideoURL == nil ? nil : "\(requiredSetupCompletionCount)/3"
+        case .review:
+            guard hasActiveAnalysisResults else { return nil }
+            return reviewQueue.isEmpty ? "Clear" : "\(reviewQueue.count)"
+        case .results:
+            guard hasActiveAnalysisResults else { return nil }
+            return analysisRows.isEmpty ? nil : "\(analysisRows.count)"
+        case .help:
+            return nil
+        }
+    }
+
+    var shellClipStatusHeadline: String {
+        if let url = currentVideoURL {
+            return url.deletingPathExtension().lastPathComponent
+        }
+        return "No active clip"
+    }
+
+    var shellClipStatusDetail: String {
+        if currentVideoURL == nil {
+            return "Import begins the workflow. Setup, review, and results stay locked until a real clip exists."
+        }
+        if hasActiveAnalysisResults {
+            return "Review, results, and exports now belong only to this clip."
+        }
+        return "This clip is loaded. Complete setup before analysis and downstream review."
+    }
+
+    var shellClipStatusMetadata: String {
+        guard currentVideoURL != nil else {
+            return "Preset \(selectedPreset.title) • Awaiting import"
+        }
+        let frameRange = "\(startFrame)→\(endFrame)"
+        return "Preset \(selectedPreset.title) • Range \(frameRange) • Track \(activeTrackLabel)"
+    }
+
+    func selectTab(_ tab: LabTab) {
+        guard !shellNavigationState(for: tab).isLocked else { return }
+        selectedTab = tab
+    }
+
+    var shellPrimaryStatusText: String {
+        if engineState == .running {
+            return "Processing"
+        }
+        switch shellNavigationState(for: selectedTab) {
+        case .active:
+            return selectedTab == .import && currentVideoURL == nil ? "Import first" : "Current Page"
+        case .complete:
+            return "Complete"
+        case .available:
+            return "Available"
+        case .locked:
+            return "Locked"
+        }
+    }
+
+    var shellPrimaryStatusTone: TrackerTheme.Status {
+        if engineState == .running {
+            return .processing
+        }
+        switch shellNavigationState(for: selectedTab) {
+        case .active:
+            return selectedTab == .import && currentVideoURL == nil ? .warning : .accent
+        case .complete:
+            return .complete
+        case .available:
+            return .ready
+        case .locked:
+            return .warning
+        }
+    }
+
+    var selectedPageEyebrow: String {
+        selectedTab == .import ? "Workspace" : selectedTab.title
+    }
+
+    var selectedPageTitle: String {
+        switch selectedTab {
+        case .import:
+            return currentVideoURL == nil ? "Import Workspace" : currentTrialHeadline
+        case .overview:
+            return "Experiment Overview"
+        case .setup:
+            return "Setup"
+        case .review:
+            return "Review"
+        case .results:
+            return "Results"
+        case .help:
+            return "Help Center"
+        }
+    }
+
+    var selectedPageSummary: String {
+        switch selectedTab {
+        case .import:
+            return currentVideoURL == nil
+                ? "Open a clip, session, or workspace to begin a new analysis with truthful empty-state guidance."
+                : "The active clip owns this workspace. Use it to manage import context, clip switching, and the live stage."
+        case .overview:
+            return "Workflow health, readiness, and trust markers stay anchored to the active clip."
+        case .setup:
+            return "Prepare calibration, target placement, and range before analysis."
+        case .review:
+            return "Inspect flagged spans, manual corrections, and event timing for the active clip."
+        case .results:
+            return "Graphs, tables, quality summaries, and exports reflect only the active clip."
+        case .help:
+            return "Keep concise product guidance close to the workflow without leaving the lab workspace."
+        }
+    }
+
+    var selectedPageContextDetail: String {
+        switch selectedTab {
+        case .import:
+            return activeClipReadinessSummary
+        case .overview:
+            return currentVideoURL == nil ? "No clip loaded." : activeClipReadinessSummary
+        case .setup:
+            return analysisGuardrailMessage
+        case .review:
+            return reviewGuardrailMessage
+        case .results:
+            return hasActiveAnalysisResults
+                ? "Active track: \(activeTrackLabel) • \(analysisRows.count) rows loaded"
+                : "Results remain quiet until the active clip has analysis."
+        case .help:
+            return currentVideoURL == nil ? "Start with import, then move into setup." : "Current workflow step: \(workflowState.title)."
+        }
+    }
+
+    var shellWorkspaceStatusText: String {
+        shellClipStatusHeadline
+    }
+
+    var shellWorkspaceDetailText: String {
+        shellClipStatusDetail
     }
 
     func stepFrame(by delta: Int) {
@@ -589,6 +1192,7 @@ final class AppModel {
             endFrame = startFrame
         }
         clampSelectedWindowToFrameRange()
+        syncWorkflowState()
         statusMessage = "Start frame set to \(startFrame)."
         selectionMessage = "Start frame saved. Set the end frame or keep the full range before analysis."
     }
@@ -599,6 +1203,7 @@ final class AppModel {
             startFrame = endFrame
         }
         clampSelectedWindowToFrameRange()
+        syncWorkflowState()
         statusMessage = "End frame set to \(endFrame)."
         selectionMessage = "End frame saved. The analysis will stop at this frame."
     }
@@ -607,21 +1212,23 @@ final class AppModel {
         annotationMode = .target
         editingCorrectionID = nil
         editingAdditionalObjectID = nil
-        selectionMessage = "Drag directly on the video to define the primary target box."
+        targetPreviewStatus = .idle
+        targetPreviewMessage = "Redraw the target, then run a quick preview."
+        selectionMessage = "Drag on the video to define the primary target."
     }
 
     func startScaleDrawing() {
         annotationMode = .scale
         editingCorrectionID = nil
         editingAdditionalObjectID = nil
-        selectionMessage = "Drag across the reference object in the video to define the calibration line."
+        selectionMessage = "Drag across the reference object in the video to define the calibration scale."
     }
 
     func startReferenceDrawing() {
         annotationMode = .reference
         editingCorrectionID = nil
         editingAdditionalObjectID = nil
-        selectionMessage = "Drag directly on the video to define the reference marker used for motion correction."
+        selectionMessage = "Drag on the video to define the reference marker for motion correction."
     }
 
     func startCorrectionDrawing(existing: CorrectionRecord? = nil) {
@@ -631,7 +1238,7 @@ final class AppModel {
         if let existing {
             currentFrame = existing.frameIndex
             seekPlayer()
-            selectionMessage = "Redraw the correction anchor for \(trackDisplayName(for: existing.trackID)) at frame \(existing.frameIndex) directly on the video."
+            selectionMessage = "Redraw the correction anchor for \(trackDisplayName(for: existing.trackID)) at frame \(existing.frameIndex) on the video."
         } else {
             selectionMessage = "Draw a correction box for \(activeTrackLabel) at the current frame."
         }
@@ -643,18 +1250,18 @@ final class AppModel {
         if let existing {
             additionalObjectDraft = existing
             editingAdditionalObjectID = existing.trackID
-            selectionMessage = "Redraw \(existing.name) directly on the video, then save the companion object."
+            selectionMessage = "Redraw \(existing.name) on the video, then save the additional object."
         } else {
             var draft = additionalObjectDraft
             if draft.trackID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 draft.trackID = "secondary_\(additionalObjects.count + 1)"
             }
             if draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                draft.name = "Secondary Object \(additionalObjects.count + 1)"
+                draft.name = "Additional Object \(additionalObjects.count + 1)"
             }
             additionalObjectDraft = draft
             editingAdditionalObjectID = nil
-            selectionMessage = "Drag a companion object directly on the video, then save it for pairwise analysis."
+            selectionMessage = "Drag an additional object on the video, then save it for pairwise analysis."
         }
     }
 
@@ -662,7 +1269,7 @@ final class AppModel {
         annotationMode = .idle
         editingCorrectionID = nil
         editingAdditionalObjectID = nil
-        selectionMessage = "Choose a preset, then calibrate and define the target box."
+        selectionMessage = "Choose a preset, then calibrate the clip and define the target."
     }
 
     func clearTargetBox() {
@@ -670,7 +1277,10 @@ final class AppModel {
         if annotationMode == .target {
             annotationMode = .idle
         }
-        statusMessage = "Cleared target box."
+        targetPreviewStatus = .idle
+        targetPreviewMessage = "Run a quick preview after drawing the target."
+        syncWorkflowState(preferredState: .calibrate)
+        statusMessage = "Cleared the target."
     }
 
     func clearScaleLine() {
@@ -678,7 +1288,8 @@ final class AppModel {
         if annotationMode == .scale {
             annotationMode = .idle
         }
-        statusMessage = "Cleared scale line."
+        syncWorkflowState(preferredState: .calibrate)
+        statusMessage = "Cleared the calibration scale."
     }
 
     func clearReferenceBox() {
@@ -703,22 +1314,76 @@ final class AppModel {
     func applyDrawnTargetBox(_ rect: CGRect) {
         targetBox = Self.boundingBoxDraft(from: rect)
         annotationMode = .idle
-        statusMessage = "Updated target box from native canvas."
-        selectionMessage = "Target box updated. Calibrate and run analysis when ready."
+        targetPreviewStatus = .idle
+        targetPreviewMessage = "Target captured. Confirm the profile, then run a quick preview."
+        syncWorkflowState()
+        statusMessage = "Updated the target on the video stage."
+        selectionMessage = "Target updated. Calibrate and run analysis when ready."
+    }
+
+    func runTargetPreviewValidation() {
+        guard currentVideoURL != nil else {
+            targetPreviewStatus = .failed
+            targetPreviewMessage = "Open a clip before validating the target preview."
+            statusMessage = targetPreviewMessage
+            return
+        }
+
+        guard let rect = targetBox.cgRect, rect.width > 0, rect.height > 0 else {
+            targetPreviewStatus = .failed
+            targetPreviewMessage = "Draw the target on the video before validating the preview."
+            statusMessage = targetPreviewMessage
+            return
+        }
+
+        let frameArea = max(sourceVideoSize.width * sourceVideoSize.height, 1)
+        let boxArea = rect.width * rect.height
+        let areaRatio = boxArea / frameArea
+        let touchesEdge =
+            rect.minX <= 0 ||
+            rect.minY <= 0 ||
+            rect.maxX >= sourceVideoSize.width ||
+            rect.maxY >= sourceVideoSize.height
+
+        if areaRatio < 0.0003 {
+            targetPreviewStatus = .warning
+            targetPreviewMessage = "The target is very small in frame. Consider zooming in or drawing a tighter box."
+        } else if areaRatio > 0.45 {
+            targetPreviewStatus = .warning
+            targetPreviewMessage = "The target fills much of the frame. A tighter crop will usually track more reliably."
+        } else if touchesEdge {
+            targetPreviewStatus = .warning
+            targetPreviewMessage = "The target touches the frame edge. Reframe or redraw if the object exits too early."
+        } else {
+            let profileNote: String
+            switch trackingProfile {
+            case .auto:
+                profileNote = "Auto profile is a safe default for general clips."
+            case .template:
+                profileNote = "Template profile is suited to repeated texture or shape."
+            case .marker:
+                profileNote = "Marker profile is ready for high-contrast targets."
+            }
+            targetPreviewStatus = .passed
+            targetPreviewMessage = "Preview looks workable. \(profileNote)"
+        }
+
+        statusMessage = targetPreviewMessage
     }
 
     func applyDrawnScaleLine(_ start: CGPoint, _ end: CGPoint) {
         scaleLine = Self.scaleLineDraft(from: start, to: end)
         annotationMode = .idle
-        statusMessage = "Updated scale line from native canvas."
-        selectionMessage = "Scale line updated. Confirm reference length and unit before analysis."
+        syncWorkflowState()
+        statusMessage = "Updated the calibration scale on the video stage."
+        selectionMessage = "Calibration scale updated. Confirm the reference length and unit before analysis."
     }
 
     func applyDrawnReferenceBox(_ rect: CGRect) {
         referenceBox = Self.boundingBoxDraft(from: rect)
         annotationMode = .idle
-        statusMessage = "Updated reference marker from native canvas."
-        selectionMessage = "Reference marker updated. The analysis can now compensate for apparatus or camera drift when available."
+        statusMessage = "Updated the reference marker on the video stage."
+        selectionMessage = "Reference marker updated. Analysis can now compensate for apparatus or camera drift when available."
     }
 
     func applyDrawnCorrection(_ rect: CGRect) {
@@ -742,7 +1407,7 @@ final class AppModel {
         annotationMode = .idle
         editingCorrectionID = nil
         refreshReviewQueue(trackQuality: sessionTrackQuality)
-        selectionMessage = "Correction anchor stored for \(trackDisplayName(for: record.trackID)) in the native review workflow."
+        selectionMessage = "Correction anchor saved for \(trackDisplayName(for: record.trackID)) and ready for review."
     }
 
     func applyDrawnAdditionalObject(_ rect: CGRect) {
@@ -751,7 +1416,7 @@ final class AppModel {
             draft.trackID = "secondary_\(additionalObjects.count + 1)"
         }
         if draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            draft.name = "Secondary Object \(additionalObjects.count + 1)"
+            draft.name = "Additional Object \(additionalObjects.count + 1)"
         }
         if draft.kind.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             draft.kind = "secondary"
@@ -762,8 +1427,8 @@ final class AppModel {
         draft.height = Self.formattedCoordinate(rect.height)
         additionalObjectDraft = draft
         annotationMode = .idle
-        selectionMessage = "Companion object geometry captured. Review the metadata, then save it into the session."
-        statusMessage = "Updated \(draft.name) from the native canvas."
+        selectionMessage = "Additional object geometry captured. Review the metadata, then save it to the session."
+        statusMessage = "Updated \(draft.name) on the video stage."
     }
 
     func addManualEvent() {
@@ -779,24 +1444,24 @@ final class AppModel {
         manualEvents.append(event)
         manualEvents.sort { ($0.frameIndex, $0.name) < ($1.frameIndex, $1.name) }
         refreshReviewQueue(trackQuality: sessionTrackQuality)
-        statusMessage = "Marked \(event.name) at frame \(event.frameIndex)"
+        statusMessage = "Marked \(event.name) at frame \(event.frameIndex)."
     }
 
     func addAdditionalObject() {
         guard additionalObjectDraft.isComplete else {
-            statusMessage = "Fill in track id, name, and bbox fields before adding a companion object."
+            statusMessage = "Fill in the track ID, name, and bounds before adding an additional object."
             return
         }
         if let editingAdditionalObjectID,
            let index = additionalObjects.firstIndex(where: { $0.trackID == editingAdditionalObjectID }) {
             additionalObjects[index] = additionalObjectDraft
-            statusMessage = "Updated secondary object \(additionalObjectDraft.name)."
+            statusMessage = "Updated additional object \(additionalObjectDraft.name)."
         } else if let index = additionalObjects.firstIndex(where: { $0.id == additionalObjectDraft.id }) {
             additionalObjects[index] = additionalObjectDraft
-            statusMessage = "Updated secondary object \(additionalObjectDraft.name)."
+            statusMessage = "Updated additional object \(additionalObjectDraft.name)."
         } else {
             additionalObjects.append(additionalObjectDraft)
-            statusMessage = "Added secondary object \(additionalObjectDraft.name)."
+            statusMessage = "Added additional object \(additionalObjectDraft.name)."
         }
         additionalObjects.sort { $0.trackID < $1.trackID }
         editingAdditionalObjectID = nil
@@ -812,7 +1477,7 @@ final class AppModel {
                 annotationMode = .idle
             }
         }
-        statusMessage = "Removed secondary object \(object.name)."
+        statusMessage = "Removed additional object \(object.name)."
     }
 
     func activateAnalysisTrack(_ trackID: String) {
@@ -820,7 +1485,8 @@ final class AppModel {
         activeTrackID = bundle.trackID
         hydrateResults(from: bundle)
         refreshReviewQueue(trackQuality: sessionTrackQuality)
-        statusMessage = "Loaded results for \(bundle.trackName)."
+        syncWorkflowState(preferredState: .review)
+        statusMessage = "Showing results for \(bundle.trackName)."
     }
 
     func selectPairwiseMetric(_ metricID: String) {
@@ -833,7 +1499,7 @@ final class AppModel {
             return bundle.trackName
         }
         if trackID == "primary" {
-            return "Primary Object"
+            return "Primary Target"
         }
         if trackID == "reference" {
             return "Reference Marker"
@@ -852,6 +1518,7 @@ final class AppModel {
         currentFrame = issue.frameIndex
         seekPlayer()
         selectedTab = .review
+        syncWorkflowState(preferredState: .review)
         statusMessage = "Jumped to frame \(issue.frameIndex) for \(issue.title.lowercased())."
     }
 
@@ -863,6 +1530,7 @@ final class AppModel {
         currentFrame = frameIndex
         seekPlayer()
         selectedTab = .review
+        syncWorkflowState(preferredState: .review)
         statusMessage = "Jumped to review frame \(frameIndex) for \(activeTrackLabel)."
     }
 
@@ -874,6 +1542,7 @@ final class AppModel {
         currentFrame = frameIndex
         seekPlayer()
         selectedTab = .review
+        syncWorkflowState(preferredState: .review)
         statusMessage = "Jumped to correction frame \(frameIndex) for \(activeTrackLabel)."
     }
 
@@ -1066,20 +1735,20 @@ final class AppModel {
     func removeManualEvent(_ event: EventMarkerRecord) {
         manualEvents.removeAll { $0.id == event.id }
         refreshReviewQueue(trackQuality: sessionTrackQuality)
-        statusMessage = "Removed event \(event.name)"
+        statusMessage = "Removed event \(event.name)."
     }
 
     func applyCorrectionReplay(for correction: CorrectionRecord? = nil) async {
         guard let videoURL = currentVideoURL else {
-            statusMessage = "Load a video before replaying a correction."
+            statusMessage = "Open a video before replaying a correction."
             return
         }
         guard let currentVideoSource else {
-            statusMessage = "The native video source is still loading. Try replaying the correction again in a moment."
+            statusMessage = "The video is still loading. Try replaying the correction again in a moment."
             return
         }
         guard !trackBundles.isEmpty else {
-            statusMessage = "Run or load an analysis before replaying a correction."
+            statusMessage = "Run or load analysis results before replaying a correction."
             return
         }
 
@@ -1249,9 +1918,11 @@ final class AppModel {
             engineState = .ready
             statusMessage = "Correction replay updated \(trackDisplayName(for: targetCorrection.trackID)) from frame \(targetCorrection.frameIndex)."
             selectedTab = .review
+            syncWorkflowState(preferredState: .review)
         } catch {
             analysisProgressFraction = 0
             engineState = .unavailable
+            syncWorkflowState()
             statusMessage = error.localizedDescription
         }
     }
@@ -1272,7 +1943,8 @@ final class AppModel {
         analysisRunTask?.cancel()
         analysisProgressFraction = 0
         engineState = .running
-        statusMessage = "Preparing native analysis bundle..."
+        syncWorkflowState(preferredState: .track)
+        statusMessage = "Preparing analysis..."
 
         let preservedSession: SessionSnapshot
         do {
@@ -1328,17 +2000,20 @@ final class AppModel {
             apply(loadResult: mergedResult)
             nativeBundleDirectory = mergedResult.exportDirectory
             analysisProgressFraction = 1
-            statusMessage = "Analysis complete. The native run coordinator is now driving the research bundle."
+            statusMessage = "Analysis complete. Results, review tools, and exports are ready."
             selectedTab = .results
             selectedResultsTab = .insights
             engineState = .ready
+            syncWorkflowState(preferredState: .review)
         } catch is CancellationError {
             analysisProgressFraction = 0
             engineState = .ready
-            statusMessage = "Analysis canceled before the native bundle finished exporting."
+            syncWorkflowState()
+            statusMessage = "Analysis was canceled before export finished."
         } catch {
             analysisProgressFraction = 0
             engineState = .unavailable
+            syncWorkflowState()
             statusMessage = error.localizedDescription
         }
         analysisRunTask = nil
@@ -1347,7 +2022,8 @@ final class AppModel {
     func cancelAnalysis() {
         guard let analysisRunTask else { return }
         analysisRunTask.cancel()
-        statusMessage = "Canceling native analysis..."
+        syncWorkflowState(preferredState: .track)
+        statusMessage = "Canceling analysis..."
     }
 
     func apply(
@@ -1482,7 +2158,7 @@ final class AppModel {
             trackBundles = [
                 AnalysisTrackBundle(
                     trackID: "primary",
-                    trackName: "Primary Object",
+                    trackName: "Primary Target",
                     trackKind: "primary",
                     summary: nil,
                     quality: nil,
@@ -1520,6 +2196,7 @@ final class AppModel {
             includePlots: session.exportPreferences?.includePlots ?? includePlots,
             debugTracking: session.exportPreferences?.includeDebugTracking ?? debugTracking
         )
+        syncWorkflowState()
     }
 
     private func apply(loadResult: AnalysisLoadResult) {
@@ -1528,7 +2205,7 @@ final class AppModel {
         trackBundles = normalizedResult.trackBundles.isEmpty ? [
             AnalysisTrackBundle(
                 trackID: "primary",
-                trackName: "Primary Object",
+                trackName: "Primary Target",
                 trackKind: "primary",
                 summary: normalizedResult.summary,
                 quality: normalizedResult.quality,
@@ -1579,6 +2256,7 @@ final class AppModel {
                 sessionBookmark: bookmarkForBundleDirectory(normalizedResult.exportDirectory)
             )
         }
+        syncWorkflowState(preferredState: .review)
     }
 
     private func addOrActivateWorkspaceClip(
@@ -1635,7 +2313,7 @@ final class AppModel {
         trackBundles = [
             AnalysisTrackBundle(
                 trackID: "primary",
-                trackName: "Primary Object",
+                trackName: "Primary Target",
                 trackKind: "primary",
                 summary: SummarySnapshot(
                     frameCount: primaryRows.count,
@@ -1679,7 +2357,7 @@ final class AppModel {
                     reviewRecommended: false,
                     notes: [
                     "Use the review journal to mark release, apex, and impact frames before publication exports.",
-                    "A commercialization-ready native shell is now in place, and the native run coordinator now owns export-time analysis.",
+                    "Export now uses the desktop analysis workflow so review and package generation stay in sync.",
                     ]
                 ),
                 modules: [
@@ -1822,7 +2500,7 @@ final class AppModel {
             applyVideoFrameBounds(frameCount: videoSource.metadata.frameCount, resetSelection: resetSelection)
         } catch {
             guard pendingVideoLoadID == loadID, currentVideoURL == url else { return }
-            statusMessage = "Loaded video, but native metadata parsing was limited: \(error.localizedDescription)"
+            statusMessage = "Opened the video, but some metadata could not be read: \(error.localizedDescription)"
         }
     }
 
@@ -2150,7 +2828,7 @@ final class AppModel {
                 return [
                     AnalysisTrackBundle(
                         trackID: "primary",
-                        trackName: "Primary Object",
+                        trackName: "Primary Target",
                         trackKind: "primary",
                         summary: normalized.summary,
                         quality: normalized.quality,

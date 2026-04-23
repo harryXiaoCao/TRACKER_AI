@@ -2,6 +2,7 @@ import Foundation
 import CoreGraphics
 
 enum LabTab: String, CaseIterable, Identifiable {
+    case `import`
     case overview
     case setup
     case review
@@ -12,11 +13,167 @@ enum LabTab: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .import: return "Import"
         case .overview: return "Overview"
         case .setup: return "Setup"
         case .review: return "Review"
         case .results: return "Results"
         case .help: return "Help"
+        }
+    }
+
+    var iconName: String {
+        switch self {
+        case .import: return "square.and.arrow.down"
+        case .overview: return "square.grid.2x2"
+        case .setup: return "slider.horizontal.3"
+        case .review: return "checklist"
+        case .results: return "chart.xyaxis.line"
+        case .help: return "book.closed"
+        }
+    }
+
+    var railSectionTitle: String {
+        switch self {
+        case .import, .overview:
+            return "Session"
+        case .setup, .review, .results:
+            return "Workflow"
+        case .help:
+            return "Reference"
+        }
+    }
+
+    var railSummary: String {
+        switch self {
+        case .import:
+            return "Load a clip, session, or workspace."
+        case .overview:
+            return "Check readiness, trust markers, and next actions."
+        case .setup:
+            return "Prepare scale, target, and analysis range."
+        case .review:
+            return "Resolve flagged spans and manual corrections."
+        case .results:
+            return "Inspect graphs, tables, and export outputs."
+        case .help:
+            return "Keep workflow guidance and scientific terms close."
+        }
+    }
+
+    var railStepNumber: Int? {
+        switch self {
+        case .import:
+            return 1
+        case .setup:
+            return 2
+        case .review:
+            return 3
+        case .results:
+            return 4
+        case .overview, .help:
+            return nil
+        }
+    }
+}
+
+enum ShellNavigationState: Equatable {
+    case available
+    case active
+    case complete
+    case locked(reason: String)
+
+    var isLocked: Bool {
+        if case .locked = self {
+            return true
+        }
+        return false
+    }
+
+    var lockReason: String? {
+        if case let .locked(reason) = self {
+            return reason
+        }
+        return nil
+    }
+}
+
+enum WorkflowState: String, CaseIterable, Identifiable {
+    case `import`
+    case calibrate
+    case track
+    case review
+    case export
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .import: return "Import"
+        case .calibrate: return "Calibrate"
+        case .track: return "Track"
+        case .review: return "Review"
+        case .export: return "Export"
+        }
+    }
+
+    var helperText: String {
+        switch self {
+        case .import:
+            return "Load a clip, session, or workspace to begin."
+        case .calibrate:
+            return "Set the frame range, calibration scale, and target before analysis."
+        case .track:
+            return "Run analysis to generate motion data, graphs, and review-ready outputs."
+        case .review:
+            return "Inspect tracking quality, corrections, and event timing."
+        case .export:
+            return "Export results, plots, and reproducible records for your study."
+        }
+    }
+}
+
+enum CompletionMilestone: String, CaseIterable, Identifiable {
+    case videoLoaded
+    case calibrationFinished
+    case targetLocked
+    case analysisCompleted
+    case exportReady
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .videoLoaded: return "Video Loaded"
+        case .calibrationFinished: return "Calibration Finished"
+        case .targetLocked: return "Target Locked"
+        case .analysisCompleted: return "Analysis Completed"
+        case .exportReady: return "Export Ready"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .videoLoaded:
+            return "The workspace has an active clip and can move into setup."
+        case .calibrationFinished:
+            return "Calibration is confirmed and physical units are ready to use."
+        case .targetLocked:
+            return "The primary target is defined and ready for tracking."
+        case .analysisCompleted:
+            return "Tracking results and motion measurements are ready to review."
+        case .exportReady:
+            return "Exports are ready to package, share, or reopen later."
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .videoLoaded: return "film"
+        case .calibrationFinished: return "ruler"
+        case .targetLocked: return "scope"
+        case .analysisCompleted: return "waveform.path.ecg"
+        case .exportReady: return "square.and.arrow.up"
         }
     }
 }
@@ -42,7 +199,7 @@ enum ResultsSubtab: String, CaseIterable, Identifiable {
         case .quality: return "Quality"
         case .pairwise: return "Pairwise"
         case .table: return "Table"
-        case .reproduce: return "Reproduce"
+        case .reproduce: return "Export"
         }
     }
 }
@@ -106,7 +263,7 @@ struct ResearchPreset: Identifiable, Hashable {
             smoothingWindow: 7,
             polyorder: 2,
             reportTemplate: "guided",
-            reviewFocus: "Check suspect spans and confirm the calibration line before exporting.",
+            reviewFocus: "Check flagged spans and confirm the calibration scale before exporting.",
             setupTip: "Use this when you want a safe starting point before specializing for a specific apparatus."
         ),
         ResearchPreset(
@@ -944,4 +1101,11 @@ enum EngineState: String {
     case ready = "Ready"
     case running = "Running Analysis"
     case unavailable = "Engine Unavailable"
+}
+
+enum TargetPreviewStatus: String {
+    case idle
+    case passed
+    case warning
+    case failed
 }
